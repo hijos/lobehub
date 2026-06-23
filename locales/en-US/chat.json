@@ -1232,6 +1232,7 @@
   "workflow.toolDisplayName.writeLocalFile": "Wrote a file",
   "workflow.working": "Working...",
   "workingPanel.agentDocuments": "Agent Documents",
+  "workingPanel.deployments.buildFailedFallback": "Last build failed; the previous release is still serving.",
   "workingPanel.deployments.copy": "Copy URL",
   "workingPanel.deployments.copySuccess": "Deployment URL copied",
   "workingPanel.deployments.empty": "No deployments in this topic",

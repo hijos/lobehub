@@ -1263,6 +1263,7 @@
   "workflow.toolDisplayName.writeLocalFile": "写入了文件",
   "workflow.working": "处理中...",
   "workingPanel.agentDocuments": "代理文档",
+  "workingPanel.deployments.buildFailedFallback": "上次构建失败，上一版本仍在线",
   "workingPanel.deployments.copy": "复制链接",
   "workingPanel.deployments.copySuccess": "部署链接已复制",
   "workingPanel.deployments.empty": "当前话题暂无部署",

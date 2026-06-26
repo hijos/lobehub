@@ -192,6 +192,47 @@ describe('createTaskRuntime', () => {
       expect(result.content).toContain('[T-1](https://app.lobehub.com/acme/task/T-1)');
     });
 
+    it('registers created task as a work version with tool context', async () => {
+      const deps = makeDeps();
+      const workModel = {
+        registerTask: vi.fn().mockResolvedValue({ id: 'work-1' }),
+      };
+
+      const runtime = createTaskRuntime({
+        agentModel: deps.agentModel as any,
+        agentId: 'agt-xyz',
+        assistantMessageId: 'msg-tool',
+        operationId: 'op-1',
+        taskCaller: deps.taskCaller,
+        taskModel: deps.taskModel as any,
+        taskService: deps.taskService as any,
+        threadId: 'thread-1',
+        toolCallId: 'tool-call-1',
+        topicId: 'topic-1',
+        workModel: workModel as any,
+      });
+
+      await runtime.createTask({
+        instruction: 'Do something',
+        name: 'Test',
+      });
+
+      expect(workModel.registerTask).toHaveBeenCalledWith({
+        agentId: 'agt-xyz',
+        messageId: 'msg-tool',
+        operationId: 'op-1',
+        role: 'created',
+        source: 'createTask',
+        sourceType: 'tool',
+        taskId: 'task-1',
+        taskIdentifier: 'T-1',
+        threadId: 'thread-1',
+        title: undefined,
+        toolCallId: 'tool-call-1',
+        topicId: 'topic-1',
+      });
+    });
+
     it('leaves createdByAgentId undefined when no agentId in context', async () => {
       const deps = makeDeps();
 
@@ -445,6 +486,40 @@ describe('createTaskRuntime', () => {
       expect(deps.taskModel.update).not.toHaveBeenCalled();
       expect(result.content).toContain('parent cleared');
     });
+
+    it('registers edited task as a new work version', async () => {
+      const deps = makeDeps();
+      const workModel = {
+        registerTask: vi.fn().mockResolvedValue({ id: 'work-1' }),
+      };
+
+      const runtime = createTaskRuntime({
+        agentModel: deps.agentModel as any,
+        agentId: 'agt-manager',
+        taskCaller: deps.taskCaller,
+        taskModel: deps.taskModel as any,
+        taskService: deps.taskService as any,
+        toolCallId: 'tool-call-edit',
+        workModel: workModel as any,
+      });
+
+      const result = await runtime.editTask({
+        identifier: 'T-1',
+        name: 'Edited',
+      });
+
+      expect(result.success).toBe(true);
+      expect(workModel.registerTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          role: 'updated',
+          source: 'editTask',
+          taskId: 'task-1',
+          taskIdentifier: 'T-1',
+          title: 'Edited',
+          toolCallId: 'tool-call-edit',
+        }),
+      );
+    });
   });
 
   describe('listTasks', () => {
@@ -495,12 +570,14 @@ describe('createTaskRuntime', () => {
 
     it('creates each task and aggregates a header line + per-item summary', async () => {
       const deps = makeDeps();
+      const workModel = { registerTask: vi.fn().mockResolvedValue({ id: 'work-1' }) };
       const runtime = createTaskRuntime({
         agentModel: deps.agentModel as any,
         agentId: 'agt-x',
         taskCaller: deps.taskCaller,
         taskModel: deps.taskModel as any,
         taskService: deps.taskService as any,
+        workModel: workModel as any,
       });
 
       const result = await runtime.createTasks({
@@ -517,6 +594,12 @@ describe('createTaskRuntime', () => {
       // clickable when the message is delivered to IM / mobile.
       expect(result.content).toContain('[T-A](https://app.lobehub.com/task/T-A)');
       expect(result.content).toContain('[T-B](https://app.lobehub.com/task/T-B)');
+      expect(result.content).toContain('T-A');
+      expect(result.content).toContain('T-B');
+      expect(workModel.registerTask).toHaveBeenCalledTimes(2);
+      expect(workModel.registerTask).toHaveBeenCalledWith(
+        expect.objectContaining({ role: 'created', source: 'createTasks', taskId: 'db-A' }),
+      );
     });
 
     it('continues past per-item failures and reports them in the summary', async () => {
@@ -565,6 +648,68 @@ describe('createTaskRuntime', () => {
 
       expect(result.success).toBe(false);
       expect(deps.taskService.createTask).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('setTaskSchedule / updateTaskStatus', () => {
+    it('registers schedule changes as a new work version', async () => {
+      const taskCaller = {
+        update: vi.fn().mockResolvedValue({}),
+        updateConfig: vi.fn().mockResolvedValue({}),
+      };
+      const taskModel = {
+        resolve: vi.fn().mockResolvedValue({ id: 'task-1', identifier: 'T-1' }),
+      };
+      const workModel = { registerTask: vi.fn().mockResolvedValue({ id: 'work-1' }) };
+      const runtime = createTaskRuntime({
+        agentModel: { existsById: vi.fn() } as any,
+        taskCaller: taskCaller as any,
+        taskModel: taskModel as any,
+        taskService: {} as any,
+        toolCallId: 'tool-call-schedule',
+        workModel: workModel as any,
+      });
+
+      const result = await runtime.setTaskSchedule({
+        automationMode: 'schedule',
+        identifier: 'T-1',
+        schedulePattern: '0 9 * * *',
+      });
+
+      expect(result.success).toBe(true);
+      expect(workModel.registerTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          role: 'updated',
+          source: 'setTaskSchedule',
+          taskId: 'task-1',
+          taskIdentifier: 'T-1',
+          toolCallId: 'tool-call-schedule',
+        }),
+      );
+    });
+
+    it('does not create a work version for status-only updates', async () => {
+      const taskCaller = {
+        updateStatus: vi.fn().mockResolvedValue({ data: { identifier: 'T-1' } }),
+      };
+      const workModel = { registerTask: vi.fn() };
+      const runtime = createTaskRuntime({
+        agentModel: { existsById: vi.fn() } as any,
+        taskCaller: taskCaller as any,
+        taskModel: {} as any,
+        taskService: {} as any,
+        workModel: workModel as any,
+      });
+
+      const result = await runtime.updateTaskStatus({ identifier: 'T-1', status: 'completed' });
+
+      expect(result.success).toBe(true);
+      expect(taskCaller.updateStatus).toHaveBeenCalledWith({
+        error: undefined,
+        id: 'T-1',
+        status: 'completed',
+      });
+      expect(workModel.registerTask).not.toHaveBeenCalled();
     });
   });
 

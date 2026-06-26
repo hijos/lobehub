@@ -1385,5 +1385,15 @@
   "workingPanel.skills.title": "Skills",
   "workingPanel.space": "Space",
   "workingPanel.title": "Working Panel",
+  "workingPanel.works.empty": "No works in this conversation yet",
+  "workingPanel.works.emptyVersions": "No versions yet",
+  "workingPanel.works.error": "Failed to load works",
+  "workingPanel.works.role.created": "Created",
+  "workingPanel.works.role.published": "Published",
+  "workingPanel.works.role.referenced": "Referenced",
+  "workingPanel.works.role.updated": "Updated",
+  "workingPanel.works.role.used_as_context": "Used as context",
+  "workingPanel.works.title": "Works",
+  "workingPanel.works.versionError": "Failed to load versions",
   "you": "You"
 }

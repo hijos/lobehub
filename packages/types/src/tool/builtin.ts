@@ -615,6 +615,11 @@ export interface BuiltinToolContext {
   taskId?: string | null;
 
   /**
+   * The current thread ID when operating inside a thread-scoped conversation.
+   */
+  threadId?: string | null;
+
+  /**
    * The tool call ID from the assistant message.
    */
   toolCallId?: string;

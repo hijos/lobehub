@@ -21,6 +21,7 @@ import debug from 'debug';
 
 import { getActiveWorkspaceSlug } from '@/business/client/hooks/useActiveWorkspaceSlug';
 import { taskService } from '@/services/task';
+import { workService } from '@/services/work';
 import { getChatStoreState } from '@/store/chat';
 import { getTaskStoreState } from '@/store/task';
 import { findSubtaskParentId } from '@/store/task/slices/detail/reducer';
@@ -78,6 +79,56 @@ const extractIdentifier = (params: unknown, result: BuiltinToolResult): string |
   const fromParams = (params as { identifier?: unknown } | null | undefined)?.identifier;
   if (typeof fromParams === 'string' && fromParams.length > 0) return fromParams;
   return undefined;
+};
+
+const refreshConversationWorks = async (ctx?: BuiltinToolContext) => {
+  await workService.refreshConversation(ctx?.topicId, ctx?.threadId).catch((error) => {
+    log('[TaskExecutor] refresh works failed:', error);
+  });
+};
+
+interface RegisterTaskWorkOptions {
+  ctx?: BuiltinToolContext;
+  role: 'created' | 'updated';
+  source: string;
+  taskId?: string;
+  taskIdentifier?: string;
+  title?: string | null;
+}
+
+const registerTaskWork = async ({
+  ctx,
+  role,
+  source,
+  taskId,
+  taskIdentifier,
+  title,
+}: RegisterTaskWorkOptions) => {
+  if (!taskId && !taskIdentifier) return;
+
+  try {
+    const work = await workService.registerTask({
+      agentId: ctx?.agentId,
+      messageId: ctx?.messageId,
+      operationId: ctx?.operationId,
+      role,
+      source,
+      sourceType: 'tool',
+      taskId,
+      taskIdentifier,
+      threadId: ctx?.threadId,
+      title,
+      toolCallId: ctx?.toolCallId,
+      topicId: ctx?.topicId,
+    });
+
+    await Promise.all([
+      workService.refreshConversation(ctx?.topicId, ctx?.threadId),
+      workService.refreshVersions(work?.id),
+    ]);
+  } catch (error) {
+    console.error('[TaskExecutor] register task work failed:', error);
+  }
 };
 
 class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
@@ -184,6 +235,7 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
       sortOrder?: number;
     },
     ctx?: BuiltinToolContext,
+    source: string = TaskApiName.createTask,
   ): Promise<BuiltinToolResult> => {
     try {
       log('[TaskExecutor] createTask - params:', params);
@@ -207,6 +259,15 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
         };
       }
 
+      await registerTaskWork({
+        ctx,
+        role: 'created',
+        source,
+        taskId: task.id,
+        taskIdentifier: task.identifier,
+        title: task.name,
+      });
+
       return {
         content: formatTaskCreated({
           baseUrl: taskLinkBaseUrl(),
@@ -228,6 +289,7 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
           priority: task.priority,
           status: task.status as TaskStatus,
           success: true,
+          taskId: task.id,
         },
         success: true,
       };
@@ -263,7 +325,7 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
     const results: CreateTasksItemResult[] = [];
 
     for (const item of items) {
-      const result = await this.createTask(item, ctx);
+      const result = await this.createTask(item, ctx, TaskApiName.createTasks);
       const success = result.success === true;
       const identifier =
         success && result.state && typeof result.state.identifier === 'string'
@@ -293,13 +355,14 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
 
   deleteTask = async (
     params: { identifier: string },
-    _ctx?: BuiltinToolContext,
+    ctx?: BuiltinToolContext,
   ): Promise<BuiltinToolResult> => {
     try {
       log('[TaskExecutor] deleteTask - params:', params);
 
       const deleted = await getTaskStoreState().deleteTask(params.identifier);
       const label = deleted?.identifier ?? params.identifier;
+      await refreshConversationWorks(ctx);
 
       return {
         content: formatTaskDeleted(label, deleted?.name),
@@ -353,7 +416,7 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
       priority?: number;
       removeDependencies?: string[];
     },
-    _ctx?: BuiltinToolContext,
+    ctx?: BuiltinToolContext,
   ): Promise<BuiltinToolResult> => {
     try {
       log('[TaskExecutor] editTask - params:', params);
@@ -419,6 +482,13 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
       }
 
       await Promise.all(ops);
+      await registerTaskWork({
+        ctx,
+        role: 'updated',
+        source: TaskApiName.editTask,
+        taskIdentifier: identifier,
+        title: params.name,
+      });
 
       return {
         content: formatTaskEdited(identifier, changes),
@@ -445,7 +515,7 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
       schedulePattern?: string | null;
       scheduleTimezone?: string | null;
     },
-    _ctx?: BuiltinToolContext,
+    ctx?: BuiltinToolContext,
   ): Promise<BuiltinToolResult> => {
     try {
       log('[TaskExecutor] setTaskSchedule - params:', params);
@@ -526,6 +596,12 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
 
       await Promise.all(ops);
       await store.internal_refreshTaskDetail(identifier);
+      await registerTaskWork({
+        ctx,
+        role: 'updated',
+        source: TaskApiName.setTaskSchedule,
+        taskIdentifier: identifier,
+      });
 
       return {
         content: formatTaskEdited(identifier, changes),
@@ -824,6 +900,7 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
       const id = await getTaskStoreState().updateTaskStatus(identifier, params.status, {
         error: params.error,
       });
+      await refreshConversationWorks(ctx);
 
       return {
         content:

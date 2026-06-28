@@ -80,16 +80,17 @@ export interface WorkVersionItem {
 }
 
 export interface WorkContextItem {
-  agentId: string | null;
+  actorAgentId: string | null;
   createdAt: Date;
+  displayAnchorAssistantMessageId: string | null;
   id: string;
-  messageId: string | null;
-  operationId: string | null;
   role: WorkContextRole;
+  rootOperationId: string | null;
   source: string;
+  sourceMessageId: string | null;
+  sourceToolCallId: string | null;
   sourceType: WorkSourceType;
   threadId: string | null;
-  toolCallId: string | null;
   topicId: string | null;
   userId: string;
   versionId: string | null;
@@ -104,21 +105,38 @@ export interface TaskWorkListItem extends WorkItem {
   };
 }
 
+export interface TaskWorkContextVersionItem extends TaskWorkListItem {
+  context: Pick<
+    WorkContextItem,
+    | 'createdAt'
+    | 'displayAnchorAssistantMessageId'
+    | 'id'
+    | 'role'
+    | 'rootOperationId'
+    | 'source'
+    | 'sourceMessageId'
+    | 'sourceToolCallId'
+    | 'sourceType'
+  >;
+  version: Pick<WorkVersionItem, 'createdAt' | 'id' | 'title' | 'version'>;
+}
+
 export interface WorkVersionListItem extends WorkVersionItem {
   context?: Pick<WorkContextItem, 'createdAt' | 'id' | 'role' | 'source' | 'sourceType'> | null;
 }
 
 export interface RegisterTaskWorkParams {
-  agentId?: string | null;
-  messageId?: string | null;
-  operationId?: string | null;
+  actorAgentId?: string | null;
+  displayAnchorAssistantMessageId?: string | null;
   role: Extract<WorkContextRole, 'created' | 'updated'>;
+  rootOperationId?: string | null;
   source: string;
+  sourceMessageId?: string | null;
+  sourceToolCallId?: string | null;
   sourceType?: WorkSourceType;
   taskId?: string;
   taskIdentifier?: string;
   threadId?: string | null;
   title?: string | null;
-  toolCallId?: string | null;
   topicId?: string | null;
 }

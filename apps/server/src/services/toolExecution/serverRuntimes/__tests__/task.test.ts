@@ -201,13 +201,14 @@ describe('createTaskRuntime', () => {
       const runtime = createTaskRuntime({
         agentModel: deps.agentModel as any,
         agentId: 'agt-xyz',
-        assistantMessageId: 'msg-tool',
+        assistantMessageId: 'msg-assistant',
         operationId: 'op-1',
         taskCaller: deps.taskCaller,
         taskModel: deps.taskModel as any,
         taskService: deps.taskService as any,
         threadId: 'thread-1',
         toolCallId: 'tool-call-1',
+        toolMessageId: 'msg-tool',
         topicId: 'topic-1',
         workModel: workModel as any,
       });
@@ -218,17 +219,17 @@ describe('createTaskRuntime', () => {
       });
 
       expect(workModel.registerTask).toHaveBeenCalledWith({
-        agentId: 'agt-xyz',
-        messageId: 'msg-tool',
-        operationId: 'op-1',
+        actorAgentId: 'agt-xyz',
         role: 'created',
+        rootOperationId: 'op-1',
         source: 'createTask',
+        sourceMessageId: 'msg-tool',
+        sourceToolCallId: 'tool-call-1',
         sourceType: 'tool',
         taskId: 'task-1',
         taskIdentifier: 'T-1',
         threadId: 'thread-1',
         title: undefined,
-        toolCallId: 'tool-call-1',
         topicId: 'topic-1',
       });
     });

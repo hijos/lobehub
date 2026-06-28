@@ -2662,20 +2662,24 @@ table work_contexts {
   source text [not null]
   topic_id text
   thread_id text
-  message_id text
-  operation_id text
-  tool_call_id text
-  agent_id text
+  source_message_id text
+  display_anchor_assistant_message_id text
+  root_operation_id text
+  source_tool_call_id text
+  actor_agent_id text
   user_id text [not null]
   workspace_id text
   created_at "timestamp with time zone" [not null, default: `now()`]
 
   indexes {
-    (work_id, tool_call_id) [name: 'work_contexts_work_id_tool_call_id_unique', unique]
+    (work_id, source_tool_call_id) [name: 'work_contexts_work_id_source_tool_call_id_unique', unique]
     work_id [name: 'work_contexts_work_id_idx']
     version_id [name: 'work_contexts_version_id_idx']
     topic_id [name: 'work_contexts_topic_id_idx']
     thread_id [name: 'work_contexts_thread_id_idx']
+    source_message_id [name: 'work_contexts_source_message_id_idx']
+    display_anchor_assistant_message_id [name: 'work_contexts_display_anchor_assistant_message_id_idx']
+    root_operation_id [name: 'work_contexts_root_operation_id_idx']
     user_id [name: 'work_contexts_user_id_idx']
     workspace_id [name: 'work_contexts_workspace_id_idx']
     (source_type, source) [name: 'work_contexts_source_idx']

@@ -39,6 +39,7 @@ import {
   useSetMessageItemActionElementPortialContext,
   useSetMessageItemActionTypeContext,
 } from '../Contexts/message-action-context';
+import MessageWorks from '../MessageWorks';
 import SignalCallbacks from '../SignalCallbacks';
 import FileListViewer from '../User/components/FileListViewer';
 import Group from './components/Group';
@@ -101,6 +102,10 @@ const GroupMessage = memo<GroupMessageProps>(
       if (!children || children.length === 0) return [];
       return children.flatMap((child: AssistantContentBlock) => child.fileList || []);
     }, [children]);
+    const workDisplayAnchorAssistantMessageIds = useMemo(
+      () => [id, ...(children?.map((child: AssistantContentBlock) => child.id) ?? [])],
+      [children, id],
+    );
 
     const isInbox = useAgentStore(builtinAgentSelectors.isInboxAgent);
     const [toggleSystemRole] = useGlobalStore((s) => [s.toggleSystemRole]);
@@ -261,6 +266,10 @@ const GroupMessage = memo<GroupMessageProps>(
           <Usage model={model} performance={performance} provider={provider!} usage={usage} />
         )}
         {footerRender}
+        <MessageWorks
+          displayAnchorAssistantMessageIds={workDisplayAnchorAssistantMessageIds}
+          messageId={id}
+        />
         {reactions.length > 0 && (
           <ReactionDisplay
             isActive={isReactionActive}

@@ -1,5 +1,6 @@
 import type {
   RegisterTaskWorkParams,
+  TaskWorkContextVersionItem,
   TaskWorkListItem,
   WorkItem,
   WorkVersionListItem,
@@ -10,11 +11,23 @@ import { workKeys } from '@/libs/swr/keys';
 import { lambdaClient } from '@/libs/trpc/client';
 
 class WorkService {
+  listByDisplayAnchorAssistantMessage = async (params: {
+    displayAnchorAssistantMessageId?: string | null;
+    displayAnchorAssistantMessageIds?: string[] | null;
+    limit?: number;
+  }): Promise<TaskWorkContextVersionItem[]> =>
+    lambdaClient.work.listByDisplayAnchorAssistantMessage.query(params);
+
   listByConversation = async (params: {
     limit?: number;
     threadId?: string | null;
     topicId?: string | null;
   }): Promise<TaskWorkListItem[]> => lambdaClient.work.listByConversation.query(params);
+
+  listByRootOperation = async (params: {
+    limit?: number;
+    rootOperationId?: string | null;
+  }): Promise<TaskWorkContextVersionItem[]> => lambdaClient.work.listByRootOperation.query(params);
 
   listVersions = async (workId: string): Promise<WorkVersionListItem[]> =>
     lambdaClient.work.listVersions.query({ workId });
@@ -25,6 +38,27 @@ class WorkService {
   refreshConversation = async (topicId?: string | null, threadId?: string | null) => {
     if (!topicId) return;
     await mutate(workKeys.conversation(topicId, threadId ?? null));
+  };
+
+  refreshDisplayAnchorAssistantMessage = async (messageId?: string | null) => {
+    if (!messageId) return;
+    await mutate(
+      (key) =>
+        Array.isArray(key) &&
+        key[0] === workKeys.displayAnchorAssistantMessage.root &&
+        (key[1] === messageId || (Array.isArray(key[1]) && key[1].includes(messageId))),
+    );
+  };
+
+  refreshDisplayAnchorAssistantMessages = async (messageIds?: string[] | null) => {
+    const ids = messageIds?.filter(Boolean);
+    if (!ids || ids.length === 0) return;
+    await mutate(workKeys.displayAnchorAssistantMessage(ids));
+  };
+
+  refreshRootOperation = async (rootOperationId?: string | null) => {
+    if (!rootOperationId) return;
+    await mutate(workKeys.rootOperation(rootOperationId));
   };
 
   refreshVersions = async (workId?: string | null) => {

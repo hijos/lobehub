@@ -117,6 +117,8 @@ export class PluginTypesActionImpl {
       const taskId = viewedTask?.type === 'detail' ? viewedTask.taskId : undefined;
       const topicId = operation?.context?.topicId ?? rootRuntimeOperationContext?.topicId;
       const threadId = operation?.context?.threadId ?? rootRuntimeOperationContext?.threadId;
+      const toolMessage = dbMessageSelectors.getDbMessageById(id)(this.#get());
+      const anchorMessageId = toolMessage?.parentId ?? rootRuntimeOperationContext?.messageId;
       const isSubAgent =
         operation?.context?.isSubAgent ?? rootRuntimeOperationContext?.isSubAgent ?? false;
 
@@ -203,6 +205,7 @@ export class PluginTypesActionImpl {
         .getState()
         .invokeBuiltinTool(payload.identifier, payload.apiName, params, {
           agentId,
+          anchorMessageId,
           documentId,
           groupId,
           groupOrchestration,
@@ -210,6 +213,7 @@ export class PluginTypesActionImpl {
           messageId: id,
           operationId,
           registerAfterCompletion,
+          rootOperationId: rootRuntimeOperationId ?? operationId,
           scope,
           signal: operation?.abortController?.signal,
           sourceMessageId:
@@ -221,6 +225,7 @@ export class PluginTypesActionImpl {
           taskId,
           threadId,
           toolCallId: payload.id,
+          toolMessageId: id,
           topicId,
         });
 

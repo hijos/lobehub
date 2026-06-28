@@ -526,6 +526,9 @@ export interface BuiltinToolContext {
    */
   agentId?: string;
 
+  /** Assistant message that owns this tool call. */
+  anchorMessageId?: string;
+
   /**
    * The current page document ID when the conversation is scoped to an open editor
    * Uses the underlying `documents.id`, not tool-specific association IDs
@@ -551,7 +554,9 @@ export interface BuiltinToolContext {
   isSubAgent?: boolean;
 
   /**
-   * The tool message ID
+   * Tool execution context key. It is the tool message ID for locally persisted
+   * tool messages, but gateway execution can temporarily use the toolCallId
+   * before the server-side tool result message exists.
    */
   messageId: string;
 
@@ -578,6 +583,11 @@ export interface BuiltinToolContext {
    * to avoid race conditions with message updates
    */
   registerAfterCompletion?: (callback: AfterCompletionCallback) => void;
+
+  /**
+   * Root AI runtime operation ID for aggregating artifacts produced by one run.
+   */
+  rootOperationId?: string;
 
   /**
    * Conversation scope captured when the operation was created
@@ -623,6 +633,14 @@ export interface BuiltinToolContext {
    * The tool call ID from the assistant message.
    */
   toolCallId?: string;
+
+  /**
+   * Explicit source tool message ID for provenance. Prefer this over `messageId`
+   * when persisting cross-domain records because gateway tool execution may use
+   * `messageId` as a client-side context key before the server creates the tool
+   * message row.
+   */
+  toolMessageId?: string;
 
   /**
    * The current topic ID (only available when operating within a topic)

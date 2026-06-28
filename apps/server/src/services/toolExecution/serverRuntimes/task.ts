@@ -59,6 +59,8 @@ export interface TaskRuntimeDeps {
   // resolved workspaceId); when absent (unit tests) links fall back to the bare
   // app origin.
   resolveLinkBaseUrl?: () => Promise<string>;
+  // Root runtime operation used to aggregate Works produced during one run.
+  rootOperationId?: string;
   scope?: string | null;
   taskCaller: ReturnType<typeof taskRouter.createCaller>;
   taskId?: string;
@@ -66,12 +68,23 @@ export interface TaskRuntimeDeps {
   taskService: TaskService;
   threadId?: string | null;
   toolCallId?: string;
+  // Source tool result message id, when the runtime already has one.
+  toolMessageId?: string;
   topicId?: string | null;
   workModel?: WorkModel;
 }
 
 export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
-  const { agentId, assistantMessageId, operationId, scope, taskId, toolCallId, topicId } = deps;
+  const {
+    agentId,
+    assistantMessageId,
+    operationId,
+    rootOperationId,
+    scope,
+    taskId,
+    toolCallId,
+    topicId,
+  } = deps;
   // Models are read through `deps` (not destructured) so callers can swap them
   // in lazily — e.g. after async workspace resolution in the runtime factory.
   const agentModel = () => deps.agentModel;
@@ -93,17 +106,17 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
 
     try {
       await model.registerTask({
-        agentId,
-        messageId: deps.assistantMessageId,
-        operationId: deps.operationId,
+        actorAgentId: agentId,
         role: params.role,
+        rootOperationId: deps.rootOperationId ?? deps.operationId,
         source: params.source,
+        sourceMessageId: deps.toolMessageId,
+        sourceToolCallId: deps.toolCallId,
         sourceType: 'tool',
         taskId: params.taskId,
         taskIdentifier: params.taskIdentifier,
         threadId: deps.threadId,
         title: params.title,
-        toolCallId: deps.toolCallId,
         topicId: deps.topicId,
       });
     } catch (error) {
@@ -163,9 +176,16 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
     // bridge the handoff result back to the creator conversation.
     // Only persist the pocket when we actually have a creator agent + topic;
     // tasks created outside an agent turn (e.g. via API) have no origin.
+    const originOperationId = rootOperationId ?? operationId;
     const origin =
       agentId && topicId
-        ? { agentId, messageId: assistantMessageId, operationId, toolCallId, topicId }
+        ? {
+            agentId,
+            messageId: assistantMessageId,
+            operationId: originOperationId,
+            toolCallId,
+            topicId,
+          }
         : undefined;
 
     const task = await taskService().createTask({
@@ -803,11 +823,13 @@ export const taskRuntime: ServerRuntimeRegistration = {
       agentId,
       assistantMessageId,
       operationId,
+      rootOperationId: context.rootOperationId ?? operationId,
       resolveLinkBaseUrl,
       scope,
       taskId,
       threadId,
       toolCallId,
+      toolMessageId: context.toolMessageId,
       topicId,
       // Initial personal-mode models cover the no-task-context case. Replaced
       // before the first call when `taskId` is set.

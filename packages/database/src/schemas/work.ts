@@ -118,10 +118,27 @@ export const workContexts = pgTable(
 
     topicId: text('topic_id').references(() => topics.id, { onDelete: 'set null' }),
     threadId: text('thread_id').references(() => threads.id, { onDelete: 'set null' }),
-    messageId: text('message_id').references(() => messages.id, { onDelete: 'set null' }),
-    operationId: text('operation_id'),
-    toolCallId: text('tool_call_id'),
-    agentId: text('agent_id').references(() => agents.id, { onDelete: 'set null' }),
+    /**
+     * Message that triggered this context. For sourceType='tool', this is the
+     * persisted tool result message; other source types may point to a user
+     * message or stay null when no chat message exists.
+     */
+    sourceMessageId: text('source_message_id').references(() => messages.id, {
+      onDelete: 'set null',
+    }),
+    /** Assistant message after which the Work footer should be rendered. */
+    displayAnchorAssistantMessageId: text('display_anchor_assistant_message_id').references(
+      () => messages.id,
+      {
+        onDelete: 'set null',
+      },
+    ),
+    /** Root runtime operation that groups all contexts created during one assistant run. */
+    rootOperationId: text('root_operation_id'),
+    /** Runtime tool-call id that produced this context, used to dedupe repeated registration. */
+    sourceToolCallId: text('source_tool_call_id'),
+    /** Agent that triggered the Work change, when the source is agent/tool driven. */
+    actorAgentId: text('actor_agent_id').references(() => agents.id, { onDelete: 'set null' }),
 
     userId: text('user_id')
       .references(() => users.id, { onDelete: 'cascade' })
@@ -130,13 +147,18 @@ export const workContexts = pgTable(
     createdAt: createdAt(),
   },
   (t) => [
-    uniqueIndex('work_contexts_work_id_tool_call_id_unique')
-      .on(t.workId, t.toolCallId)
-      .where(isNotNull(t.toolCallId)),
+    uniqueIndex('work_contexts_work_id_source_tool_call_id_unique')
+      .on(t.workId, t.sourceToolCallId)
+      .where(isNotNull(t.sourceToolCallId)),
     index('work_contexts_work_id_idx').on(t.workId),
     index('work_contexts_version_id_idx').on(t.versionId),
     index('work_contexts_topic_id_idx').on(t.topicId),
     index('work_contexts_thread_id_idx').on(t.threadId),
+    index('work_contexts_source_message_id_idx').on(t.sourceMessageId),
+    index('work_contexts_display_anchor_assistant_message_id_idx').on(
+      t.displayAnchorAssistantMessageId,
+    ),
+    index('work_contexts_root_operation_id_idx').on(t.rootOperationId),
     index('work_contexts_user_id_idx').on(t.userId),
     index('work_contexts_workspace_id_idx').on(t.workspaceId),
     index('work_contexts_source_idx').on(t.sourceType, t.source),

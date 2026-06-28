@@ -762,7 +762,10 @@ export const createGatewayEventHandler = (
         // — NOT the local `operationId` used for `dispatchContext`.
         const data = event.data as ToolExecuteData | undefined;
         if (!data) break;
-        void get().internal_executeClientTool(data, { operationId: gatewayOperationId });
+        void get().internal_executeClientTool(data, {
+          localOperationId: operationId,
+          operationId: gatewayOperationId,
+        });
         break;
       }
 

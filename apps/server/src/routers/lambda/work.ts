@@ -24,21 +24,32 @@ const contextRoleSchema = z.enum(['created', 'updated']);
 const sourceTypeSchema = z.enum(['import', 'system', 'tool', 'user']);
 
 const registerTaskSchema = z.object({
-  agentId: z.string().nullable().optional(),
-  messageId: z.string().nullable().optional(),
-  operationId: z.string().nullable().optional(),
+  actorAgentId: z.string().nullable().optional(),
+  displayAnchorAssistantMessageId: z.string().nullable().optional(),
   role: contextRoleSchema,
+  rootOperationId: z.string().nullable().optional(),
   source: z.string().min(1),
+  sourceMessageId: z.string().nullable().optional(),
+  sourceToolCallId: z.string().nullable().optional(),
   sourceType: sourceTypeSchema.optional(),
   taskId: z.string().optional(),
   taskIdentifier: z.string().optional(),
   threadId: z.string().nullable().optional(),
   title: z.string().nullable().optional(),
-  toolCallId: z.string().nullable().optional(),
   topicId: z.string().nullable().optional(),
 }) satisfies z.ZodType<RegisterTaskWorkParams>;
 
 export const workRouter = router({
+  listByDisplayAnchorAssistantMessage: workProcedure
+    .input(
+      z.object({
+        displayAnchorAssistantMessageId: z.string().nullable().optional(),
+        displayAnchorAssistantMessageIds: z.array(z.string()).nullable().optional(),
+        limit: z.number().min(1).max(50).default(20),
+      }),
+    )
+    .query(async ({ ctx, input }) => ctx.workModel.listByDisplayAnchorAssistantMessage(input)),
+
   listByConversation: workProcedure
     .input(
       z.object({
@@ -48,6 +59,20 @@ export const workRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => ctx.workModel.listByConversation(input)),
+
+  listByRootOperation: workProcedure
+    .input(
+      z.object({
+        limit: z.number().min(1).max(50).default(20),
+        rootOperationId: z.string().nullable().optional(),
+      }),
+    )
+    .query(async ({ ctx, input }) =>
+      ctx.workModel.listByRootOperation({
+        limit: input.limit,
+        rootOperationId: input.rootOperationId,
+      }),
+    ),
 
   listVersions: workProcedure
     .input(z.object({ workId: z.string().min(1) }))

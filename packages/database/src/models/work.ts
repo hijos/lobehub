@@ -1,6 +1,7 @@
 import type {
   RegisterTaskWorkParams,
   TaskItem,
+  TaskWorkContextVersionItem,
   TaskWorkListItem,
   TaskWorkVersionSnapshot,
   WorkItem,
@@ -178,11 +179,11 @@ export class WorkModel {
     return work ?? null;
   };
 
-  private findVersionByToolCall = async (
+  private findVersionBySourceToolCall = async (
     workId: string,
-    toolCallId?: string | null,
+    sourceToolCallId?: string | null,
   ): Promise<WorkVersionItem | null> => {
-    if (!toolCallId) return null;
+    if (!sourceToolCallId) return null;
 
     const [row] = await this.db
       .select({ version: workVersions })
@@ -193,7 +194,7 @@ export class WorkModel {
         and(
           this.contextOwnership(),
           eq(workContexts.workId, workId),
-          eq(workContexts.toolCallId, toolCallId),
+          eq(workContexts.sourceToolCallId, sourceToolCallId),
         ),
       )
       .limit(1);
@@ -206,7 +207,7 @@ export class WorkModel {
     task: TaskItem,
     params: RegisterTaskWorkParams,
   ): Promise<WorkVersionItem> => {
-    const existing = await this.findVersionByToolCall(work.id, params.toolCallId);
+    const existing = await this.findVersionBySourceToolCall(work.id, params.sourceToolCallId);
     if (existing) return existing;
 
     const title = this.taskTitle(task, params.title);
@@ -236,14 +237,15 @@ export class WorkModel {
             .returning();
 
           await tx.insert(workContexts).values({
-            agentId: params.agentId ?? null,
-            messageId: params.messageId ?? null,
-            operationId: params.operationId ?? null,
+            actorAgentId: params.actorAgentId ?? null,
+            displayAnchorAssistantMessageId: params.displayAnchorAssistantMessageId ?? null,
             role: params.role,
+            rootOperationId: params.rootOperationId ?? null,
             source: params.source,
+            sourceMessageId: params.sourceMessageId ?? null,
+            sourceToolCallId: params.sourceToolCallId ?? null,
             sourceType: params.sourceType ?? 'tool',
             threadId: params.threadId ?? null,
-            toolCallId: params.toolCallId ?? null,
             topicId: params.topicId ?? null,
             userId: this.userId,
             versionId: version.id,
@@ -261,7 +263,10 @@ export class WorkModel {
       } catch (error) {
         if (!isUniqueViolation(error) || attempt === MAX_VERSION_CREATE_RETRIES - 1) throw error;
 
-        const existingAfterConflict = await this.findVersionByToolCall(work.id, params.toolCallId);
+        const existingAfterConflict = await this.findVersionBySourceToolCall(
+          work.id,
+          params.sourceToolCallId,
+        );
         if (existingAfterConflict) return existingAfterConflict;
       }
     }
@@ -278,6 +283,140 @@ export class WorkModel {
     await this.createTaskVersion(work, task, params);
 
     return this.findById(work.id);
+  };
+
+  attachSourceMessage = async (params: {
+    rootOperationId?: string | null;
+    sourceMessageId?: string | null;
+    sourceToolCallId?: string | null;
+  }) => {
+    if (!params.sourceMessageId || !params.sourceToolCallId) return;
+
+    const filters = [
+      this.contextOwnership(),
+      eq(workContexts.sourceToolCallId, params.sourceToolCallId),
+      isNull(workContexts.sourceMessageId),
+    ];
+    if (params.rootOperationId) {
+      filters.push(eq(workContexts.rootOperationId, params.rootOperationId));
+    }
+
+    await this.db
+      .update(workContexts)
+      .set({ sourceMessageId: params.sourceMessageId })
+      .where(and(...filters));
+  };
+
+  attachDisplayAnchorAssistantMessage = async (params: {
+    displayAnchorAssistantMessageId?: string | null;
+    rootOperationId?: string | null;
+  }) => {
+    if (!params.displayAnchorAssistantMessageId || !params.rootOperationId) return;
+
+    await this.db
+      .update(workContexts)
+      .set({ displayAnchorAssistantMessageId: params.displayAnchorAssistantMessageId })
+      .where(
+        and(
+          this.contextOwnership(),
+          eq(workContexts.rootOperationId, params.rootOperationId),
+          eq(workContexts.sourceType, 'tool'),
+          isNull(workContexts.displayAnchorAssistantMessageId),
+        ),
+      );
+  };
+
+  private listTaskContextVersions = async (
+    filters: SQL[],
+    limit = 20,
+  ): Promise<TaskWorkContextVersionItem[]> => {
+    const rows = await this.db
+      .select({
+        context: workContexts,
+        taskPriority: tasks.priority,
+        taskStatus: tasks.status,
+        version: {
+          createdAt: workVersions.createdAt,
+          id: workVersions.id,
+          title: workVersions.title,
+          version: workVersions.version,
+        },
+        work: works,
+      })
+      .from(workContexts)
+      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
+      .innerJoin(workVersions, eq(workContexts.versionId, workVersions.id))
+      .innerJoin(
+        tasks,
+        and(eq(works.resourceType, 'task'), eq(works.resourceId, tasks.id), this.taskOwnership()),
+      )
+      .where(
+        and(
+          this.contextOwnership(),
+          ...filters,
+          inArray(workContexts.role, VERSION_CONTEXT_ROLES),
+          eq(works.type, 'task'),
+        ),
+      )
+      .orderBy(desc(workContexts.createdAt))
+      .limit(limit);
+
+    return rows.map((row) => ({
+      ...row.work,
+      context: {
+        createdAt: row.context.createdAt,
+        displayAnchorAssistantMessageId: row.context.displayAnchorAssistantMessageId,
+        id: row.context.id,
+        role: row.context.role,
+        rootOperationId: row.context.rootOperationId,
+        source: row.context.source,
+        sourceMessageId: row.context.sourceMessageId,
+        sourceToolCallId: row.context.sourceToolCallId,
+        sourceType: row.context.sourceType,
+      },
+      task: {
+        priority: row.taskPriority,
+        status: row.taskStatus,
+      },
+      version: row.version,
+    }));
+  };
+
+  listByDisplayAnchorAssistantMessage = async (params: {
+    displayAnchorAssistantMessageId?: string | null;
+    displayAnchorAssistantMessageIds?: string[] | null;
+    limit?: number;
+  }): Promise<TaskWorkContextVersionItem[]> => {
+    const messageIds = Array.from(
+      new Set(
+        [
+          ...(params.displayAnchorAssistantMessageIds ?? []),
+          params.displayAnchorAssistantMessageId,
+        ].filter(Boolean) as string[],
+      ),
+    );
+    if (messageIds.length === 0) return [];
+
+    return this.listTaskContextVersions(
+      [
+        messageIds.length === 1
+          ? eq(workContexts.displayAnchorAssistantMessageId, messageIds[0])
+          : inArray(workContexts.displayAnchorAssistantMessageId, messageIds),
+      ],
+      params.limit ?? 20,
+    );
+  };
+
+  listByRootOperation = async (params: {
+    limit?: number;
+    rootOperationId?: string | null;
+  }): Promise<TaskWorkContextVersionItem[]> => {
+    if (!params.rootOperationId) return [];
+
+    return this.listTaskContextVersions(
+      [eq(workContexts.rootOperationId, params.rootOperationId)],
+      params.limit ?? 20,
+    );
   };
 
   listByConversation = async (params: {

@@ -5,6 +5,7 @@ import { type ToolType } from '@lobechat/observability-otel/modules/agent-runtim
 import { type ChatToolPayload } from '@lobechat/types';
 import debug from 'debug';
 
+import { WorkModel } from '@/database/models/work';
 import { type LobeChatDatabase } from '@/database/type';
 import { FileService } from '@/server/services/file';
 import {
@@ -64,6 +65,64 @@ export const archiveRuntimeToolResult = async (
   });
 
   return archive.content === result.content ? result : { ...result, content: archive.content };
+};
+
+export const attachWorkSourceMessage = async ({
+  rootOperationId,
+  serverDB,
+  sourceMessageId,
+  sourceToolCallId,
+  userId,
+  workspaceId,
+}: {
+  rootOperationId?: string;
+  serverDB: LobeChatDatabase;
+  sourceMessageId?: string;
+  sourceToolCallId?: string;
+  userId?: string;
+  workspaceId?: string;
+}) => {
+  if (!sourceMessageId || !sourceToolCallId || !userId) return;
+
+  try {
+    await new WorkModel(serverDB, userId, workspaceId).attachSourceMessage({
+      rootOperationId,
+      sourceMessageId,
+      sourceToolCallId,
+    });
+  } catch (error) {
+    log('attachWorkSourceMessage failed for toolCallId=%s: %O', sourceToolCallId, error);
+  }
+};
+
+export const attachWorkDisplayAnchorAssistantMessage = async ({
+  displayAnchorAssistantMessageId,
+  rootOperationId,
+  serverDB,
+  userId,
+  workspaceId,
+}: {
+  displayAnchorAssistantMessageId?: string;
+  rootOperationId?: string;
+  serverDB: LobeChatDatabase;
+  userId?: string;
+  workspaceId?: string;
+}) => {
+  if (!displayAnchorAssistantMessageId || !rootOperationId || !userId) return;
+
+  try {
+    await new WorkModel(serverDB, userId, workspaceId).attachDisplayAnchorAssistantMessage({
+      displayAnchorAssistantMessageId,
+      rootOperationId,
+    });
+  } catch (error) {
+    log(
+      'attachWorkDisplayAnchorAssistantMessage failed for rootOperationId=%s messageId=%s: %O',
+      rootOperationId,
+      displayAnchorAssistantMessageId,
+      error,
+    );
+  }
 };
 
 // Builds a postProcessUrl callback that resolves keys in file-backed fields

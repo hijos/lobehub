@@ -107,23 +107,25 @@ const registerTaskWork = async ({
   if (!taskId && !taskIdentifier) return;
 
   try {
+    const rootOperationId = ctx?.rootOperationId ?? ctx?.operationId;
     const work = await workService.registerTask({
-      agentId: ctx?.agentId,
-      messageId: ctx?.messageId,
-      operationId: ctx?.operationId,
+      actorAgentId: ctx?.agentId,
       role,
+      rootOperationId,
       source,
+      sourceMessageId: ctx?.toolMessageId,
+      sourceToolCallId: ctx?.toolCallId,
       sourceType: 'tool',
       taskId,
       taskIdentifier,
       threadId: ctx?.threadId,
       title,
-      toolCallId: ctx?.toolCallId,
       topicId: ctx?.topicId,
     });
 
     await Promise.all([
       workService.refreshConversation(ctx?.topicId, ctx?.threadId),
+      workService.refreshRootOperation(rootOperationId),
       workService.refreshVersions(work?.id),
     ]);
   } catch (error) {

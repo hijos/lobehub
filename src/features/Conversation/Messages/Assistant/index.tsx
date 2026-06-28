@@ -19,6 +19,7 @@ import {
   useSetMessageItemActionElementPortialContext,
   useSetMessageItemActionTypeContext,
 } from '../Contexts/message-action-context';
+import MessageWorks from '../MessageWorks';
 import InterruptedHint from './components/InterruptedHint';
 import MessageContent from './components/MessageContent';
 import { AssistantMessageExtra } from './Extra';
@@ -133,6 +134,7 @@ const AssistantMessage = memo<AssistantMessageProps>(
               usage={usage! || metadata}
             />
             {footerRender}
+            <MessageWorks messageId={id} />
           </>
         }
         onDoubleClick={onDoubleClick}

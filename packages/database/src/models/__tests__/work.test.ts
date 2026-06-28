@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { getTestDB } from '../../core/getTestDB';
-import { threads, topics, users, workContexts, works, workVersions } from '../../schemas';
+import { messages, threads, topics, users, workContexts, works, workVersions } from '../../schemas';
 import type { LobeChatDatabase } from '../../type';
 import { TaskModel } from '../task';
 import { WorkModel } from '../work';
@@ -41,13 +41,33 @@ describe('WorkModel', () => {
       name: 'Work MVP plan',
       priority: 2,
     });
+    await serverDB.insert(messages).values([
+      {
+        content: '',
+        id: 'msg-assistant',
+        role: 'assistant',
+        topicId,
+        userId,
+      },
+      {
+        content: '',
+        id: 'msg-tool',
+        parentId: 'msg-assistant',
+        role: 'tool',
+        topicId,
+        userId,
+      },
+    ]);
 
     const work = await workModel.registerTask({
+      displayAnchorAssistantMessageId: 'msg-assistant',
       role: 'created',
+      rootOperationId: 'op-root',
       source: 'createTask',
+      sourceMessageId: 'msg-tool',
+      sourceToolCallId: 'tool-call-create',
       taskId: task.id,
       threadId,
-      toolCallId: 'tool-call-create',
       topicId,
     });
 
@@ -71,18 +91,140 @@ describe('WorkModel', () => {
       id: work?.id,
       task: { priority: 2, status: 'backlog' },
     });
+
+    const [context] = await serverDB
+      .select()
+      .from(workContexts)
+      .where(eq(workContexts.workId, work!.id));
+    expect(context).toMatchObject({
+      displayAnchorAssistantMessageId: 'msg-assistant',
+      rootOperationId: 'op-root',
+      sourceMessageId: 'msg-tool',
+      sourceToolCallId: 'tool-call-create',
+    });
+
+    const byAnchorMessage = await workModel.listByDisplayAnchorAssistantMessage({
+      displayAnchorAssistantMessageId: 'msg-assistant',
+    });
+    expect(byAnchorMessage).toHaveLength(1);
+    expect(byAnchorMessage[0]).toMatchObject({
+      context: expect.objectContaining({
+        displayAnchorAssistantMessageId: 'msg-assistant',
+        rootOperationId: 'op-root',
+        sourceMessageId: 'msg-tool',
+      }),
+      id: work?.id,
+    });
+
+    const byAnchorMessages = await workModel.listByDisplayAnchorAssistantMessage({
+      displayAnchorAssistantMessageIds: ['msg-missing', 'msg-assistant'],
+    });
+    expect(byAnchorMessages).toHaveLength(1);
+
+    const byOperation = await workModel.listByRootOperation({ rootOperationId: 'op-root' });
+    expect(byOperation).toHaveLength(1);
+    expect(byOperation[0].id).toBe(work?.id);
+  });
+
+  it('attaches pending tool contexts to the next assistant message within one operation', async () => {
+    const taskModel = new TaskModel(serverDB, userId);
+    const workModel = new WorkModel(serverDB, userId);
+    const firstTask = await taskModel.create({
+      instruction: 'First tool work',
+      name: 'First work',
+    });
+    const secondTask = await taskModel.create({
+      instruction: 'Second tool work',
+      name: 'Second work',
+    });
+    await serverDB.insert(messages).values([
+      {
+        content: '',
+        id: 'msg-assistant-after-tool-1',
+        role: 'assistant',
+        topicId,
+        userId,
+      },
+      {
+        content: '',
+        id: 'msg-assistant-after-tool-2',
+        role: 'assistant',
+        topicId,
+        userId,
+      },
+    ]);
+
+    await workModel.registerTask({
+      role: 'created',
+      rootOperationId: 'op-sequential-tools',
+      source: 'createTask',
+      sourceToolCallId: 'tool-call-1',
+      taskId: firstTask.id,
+      topicId,
+    });
+    await workModel.attachDisplayAnchorAssistantMessage({
+      displayAnchorAssistantMessageId: 'msg-assistant-after-tool-1',
+      rootOperationId: 'op-sequential-tools',
+    });
+
+    await workModel.registerTask({
+      role: 'created',
+      rootOperationId: 'op-sequential-tools',
+      source: 'createTask',
+      sourceToolCallId: 'tool-call-2',
+      taskId: secondTask.id,
+      topicId,
+    });
+    await workModel.attachDisplayAnchorAssistantMessage({
+      displayAnchorAssistantMessageId: 'msg-assistant-after-tool-2',
+      rootOperationId: 'op-sequential-tools',
+    });
+
+    const contexts = await serverDB
+      .select({
+        displayAnchorAssistantMessageId: workContexts.displayAnchorAssistantMessageId,
+        sourceToolCallId: workContexts.sourceToolCallId,
+      })
+      .from(workContexts)
+      .where(eq(workContexts.rootOperationId, 'op-sequential-tools'));
+
+    expect(
+      Object.fromEntries(
+        contexts.map((item) => [item.sourceToolCallId, item.displayAnchorAssistantMessageId]),
+      ),
+    ).toEqual({
+      'tool-call-1': 'msg-assistant-after-tool-1',
+      'tool-call-2': 'msg-assistant-after-tool-2',
+    });
+
+    const firstAnchorWorks = await workModel.listByDisplayAnchorAssistantMessage({
+      displayAnchorAssistantMessageId: 'msg-assistant-after-tool-1',
+    });
+    const secondAnchorWorks = await workModel.listByDisplayAnchorAssistantMessage({
+      displayAnchorAssistantMessageId: 'msg-assistant-after-tool-2',
+    });
+    expect(firstAnchorWorks.map((item) => item.resourceId)).toEqual([firstTask.id]);
+    expect(secondAnchorWorks.map((item) => item.resourceId)).toEqual([secondTask.id]);
   });
 
   it('keeps one work row and appends versions for task edits', async () => {
     const taskModel = new TaskModel(serverDB, userId);
     const workModel = new WorkModel(serverDB, userId);
     const task = await taskModel.create({ instruction: 'Original', name: 'Original title' });
+    await serverDB.insert(messages).values({
+      content: '',
+      id: 'msg-tool-edit',
+      role: 'tool',
+      topicId,
+      userId,
+    });
 
     const first = await workModel.registerTask({
       role: 'created',
+      rootOperationId: 'op-create',
       source: 'createTask',
+      sourceToolCallId: 'tool-call-create',
       taskId: task.id,
-      toolCallId: 'tool-call-create',
       topicId,
     });
 
@@ -93,10 +235,16 @@ describe('WorkModel', () => {
 
     const second = await workModel.registerTask({
       role: 'updated',
+      rootOperationId: 'op-edit',
       source: 'editTask',
+      sourceToolCallId: 'tool-call-edit',
       taskIdentifier: task.identifier,
-      toolCallId: 'tool-call-edit',
       topicId,
+    });
+    await workModel.attachSourceMessage({
+      rootOperationId: 'op-edit',
+      sourceMessageId: 'msg-tool-edit',
+      sourceToolCallId: 'tool-call-edit',
     });
 
     expect(second?.id).toBe(first?.id);
@@ -108,7 +256,14 @@ describe('WorkModel', () => {
     const versions = await workModel.listVersions(first!.id);
     expect(versions.map((item) => item.version)).toEqual([2, 1]);
     expect(versions[0].context?.role).toBe('updated');
+    expect(versions[0].context?.id).toBeTruthy();
     expect(versions[0].snapshot.task.instruction).toBe('Updated instruction');
+
+    const [updatedContext] = await serverDB
+      .select()
+      .from(workContexts)
+      .where(eq(workContexts.sourceToolCallId, 'tool-call-edit'));
+    expect(updatedContext.sourceMessageId).toBe('msg-tool-edit');
   });
 
   it('does not let another user register someone else task', async () => {
@@ -119,8 +274,8 @@ describe('WorkModel', () => {
     const work = await otherWorkModel.registerTask({
       role: 'created',
       source: 'createTask',
+      sourceToolCallId: 'tool-call-other-user',
       taskIdentifier: task.identifier,
-      toolCallId: 'tool-call-other-user',
       topicId,
     });
 
@@ -137,8 +292,8 @@ describe('WorkModel', () => {
     const work = await workModel.registerTask({
       role: 'created',
       source: 'createTask',
+      sourceToolCallId: 'tool-call-topic-delete',
       taskId: task.id,
-      toolCallId: 'tool-call-topic-delete',
       topicId,
     });
 

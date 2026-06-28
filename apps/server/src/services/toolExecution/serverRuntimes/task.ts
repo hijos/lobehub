@@ -641,6 +641,12 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
       }
 
       await taskCaller().updateVerifyConfig({ id: task.id, verify });
+      await registerTaskWork({
+        role: 'updated',
+        source: TaskApiName.setTaskVerify,
+        taskId: task.id,
+        taskIdentifier: task.identifier,
+      });
 
       return { content: formatTaskEdited(task.identifier, changes), success: true };
     },

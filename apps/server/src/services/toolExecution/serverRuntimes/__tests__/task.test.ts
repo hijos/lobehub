@@ -514,10 +514,10 @@ describe('createTaskRuntime', () => {
         expect.objectContaining({
           role: 'updated',
           source: 'editTask',
+          sourceToolCallId: 'tool-call-edit',
           taskId: 'task-1',
           taskIdentifier: 'T-1',
           title: 'Edited',
-          toolCallId: 'tool-call-edit',
         }),
       );
     });
@@ -652,7 +652,7 @@ describe('createTaskRuntime', () => {
     });
   });
 
-  describe('setTaskSchedule / updateTaskStatus', () => {
+  describe('setTaskSchedule / setTaskVerify / updateTaskStatus', () => {
     it('registers schedule changes as a new work version', async () => {
       const taskCaller = {
         update: vi.fn().mockResolvedValue({}),
@@ -682,9 +682,51 @@ describe('createTaskRuntime', () => {
         expect.objectContaining({
           role: 'updated',
           source: 'setTaskSchedule',
+          sourceToolCallId: 'tool-call-schedule',
           taskId: 'task-1',
           taskIdentifier: 'T-1',
-          toolCallId: 'tool-call-schedule',
+        }),
+      );
+    });
+
+    it('registers verify config changes as a new work version', async () => {
+      const taskCaller = {
+        updateVerifyConfig: vi.fn().mockResolvedValue({}),
+      };
+      const taskModel = {
+        resolve: vi.fn().mockResolvedValue({ id: 'task-1', identifier: 'T-1' }),
+      };
+      const workModel = { registerTask: vi.fn().mockResolvedValue({ id: 'work-1' }) };
+      const runtime = createTaskRuntime({
+        agentModel: { existsById: vi.fn() } as any,
+        taskCaller: taskCaller as any,
+        taskModel: taskModel as any,
+        taskService: {} as any,
+        toolCallId: 'tool-call-verify',
+        workModel: workModel as any,
+      });
+
+      const result = await runtime.setTaskVerify({
+        enabled: true,
+        identifier: 'T-1',
+        requirement: 'The output must include a working demo.',
+      });
+
+      expect(result.success).toBe(true);
+      expect(taskCaller.updateVerifyConfig).toHaveBeenCalledWith({
+        id: 'task-1',
+        verify: {
+          enabled: true,
+          requirement: 'The output must include a working demo.',
+        },
+      });
+      expect(workModel.registerTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          role: 'updated',
+          source: 'setTaskVerify',
+          sourceToolCallId: 'tool-call-verify',
+          taskId: 'task-1',
+          taskIdentifier: 'T-1',
         }),
       );
     });

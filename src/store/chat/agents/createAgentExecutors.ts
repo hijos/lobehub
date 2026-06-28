@@ -39,6 +39,7 @@ import { aiAgentService } from '@/services/aiAgent';
 import { chatService } from '@/services/chat';
 import { type ResolvedAgentConfig } from '@/services/chat/mecha';
 import { messageService } from '@/services/message';
+import { workService } from '@/services/work';
 import { type ChatStore } from '@/store/chat/store';
 import { getCompressionCandidateMessageIds } from '@/store/chat/utils/compression';
 import { getFileStoreState } from '@/store/file/store';
@@ -166,6 +167,49 @@ export const createAgentExecutors = (context: {
   toolsEngine?: ToolsEngine;
 }) => {
   let shouldSkipCreateMessage = context.skipCreateFirstMessage;
+
+  const hasToolCallingOperation = () => {
+    const operations = context.get().operations;
+    const rootOperation = operations[context.operationId];
+    if (!rootOperation) return false;
+
+    const visited = new Set<string>();
+    const pending = [...(rootOperation.childOperationIds ?? [])];
+
+    while (pending.length > 0) {
+      const operationId = pending.pop();
+      if (!operationId || visited.has(operationId)) continue;
+
+      visited.add(operationId);
+      const operation = operations[operationId];
+      if (!operation) continue;
+      if (operation.type === 'toolCalling') return true;
+
+      pending.push(...(operation.childOperationIds ?? []));
+    }
+
+    return false;
+  };
+
+  const attachWorkDisplayAnchorForAssistant = async (assistantMessageId: string) => {
+    if (!hasToolCallingOperation()) return;
+
+    // Example: createTask writes a Work during a tool operation. The next
+    // assistant message may not be the direct child of that tool message, so
+    // anchor unclaimed Works by the root runtime operation instead.
+    try {
+      const updatedCount = await workService.attachDisplayAnchorAssistantMessage({
+        displayAnchorAssistantMessageId: assistantMessageId,
+        rootOperationId: context.operationId,
+      });
+
+      if (updatedCount > 0) {
+        await workService.refreshDisplayAnchorAssistantMessage(assistantMessageId);
+      }
+    } catch (error) {
+      console.error('[Work] Failed to attach display anchor assistant message:', error);
+    }
+  };
 
   /**
    * Get operation context via closure
@@ -556,6 +600,7 @@ export const createAgentExecutors = (context: {
             },
             { operationId: context.operationId },
           );
+          await attachWorkDisplayAnchorForAssistant(assistantMessageId);
         },
         onMessageHandle: async (chunk) => {
           handler.handleChunk(chunk as StreamChunk);

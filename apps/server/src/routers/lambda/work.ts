@@ -40,6 +40,15 @@ const registerTaskSchema = z.object({
 }) satisfies z.ZodType<RegisterTaskWorkParams>;
 
 export const workRouter = router({
+  attachDisplayAnchorAssistantMessage: workProcedureWrite
+    .input(
+      z.object({
+        displayAnchorAssistantMessageId: z.string().nullable().optional(),
+        rootOperationId: z.string().nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => ctx.workModel.attachDisplayAnchorAssistantMessage(input)),
+
   listByDisplayAnchorAssistantMessage: workProcedure
     .input(
       z.object({

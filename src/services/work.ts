@@ -11,6 +11,11 @@ import { workKeys } from '@/libs/swr/keys';
 import { lambdaClient } from '@/libs/trpc/client';
 
 class WorkService {
+  attachDisplayAnchorAssistantMessage = async (params: {
+    displayAnchorAssistantMessageId?: string | null;
+    rootOperationId?: string | null;
+  }): Promise<number> => lambdaClient.work.attachDisplayAnchorAssistantMessage.mutate(params);
+
   listByDisplayAnchorAssistantMessage = async (params: {
     displayAnchorAssistantMessageId?: string | null;
     displayAnchorAssistantMessageIds?: string[] | null;

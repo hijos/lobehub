@@ -311,9 +311,9 @@ export class WorkModel {
     displayAnchorAssistantMessageId?: string | null;
     rootOperationId?: string | null;
   }) => {
-    if (!params.displayAnchorAssistantMessageId || !params.rootOperationId) return;
+    if (!params.displayAnchorAssistantMessageId || !params.rootOperationId) return 0;
 
-    await this.db
+    const rows = await this.db
       .update(workContexts)
       .set({ displayAnchorAssistantMessageId: params.displayAnchorAssistantMessageId })
       .where(
@@ -323,7 +323,12 @@ export class WorkModel {
           eq(workContexts.sourceType, 'tool'),
           isNull(workContexts.displayAnchorAssistantMessageId),
         ),
-      );
+      )
+      .returning({
+        id: workContexts.id,
+      });
+
+    return rows.length;
   };
 
   private listTaskContextVersions = async (

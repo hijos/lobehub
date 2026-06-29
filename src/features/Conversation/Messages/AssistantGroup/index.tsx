@@ -55,6 +55,25 @@ const actionBarHolder = (
     style={{ height: '28px' }}
   />
 );
+
+const getOperationFinalRootId = (metadata?: { work?: { rootOperationId?: unknown } } | null) =>
+  typeof metadata?.work?.rootOperationId === 'string' ? metadata.work.rootOperationId : undefined;
+
+const findLatestWorkRootOperationId = (
+  metadata?: { work?: { rootOperationId?: unknown } } | null,
+  children?: AssistantContentBlock[],
+  taskCompletions?: AssistantContentBlock[],
+) => {
+  const blocks = [...(children ?? []), ...(taskCompletions ?? [])];
+
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const rootOperationId = getOperationFinalRootId(blocks[index]?.metadata);
+    if (rootOperationId) return rootOperationId;
+  }
+
+  return getOperationFinalRootId(metadata);
+};
+
 interface GroupMessageProps {
   defaultWorkflowExpandLevel?: WorkflowExpandLevelDefault;
   disableEditing?: boolean;
@@ -102,9 +121,9 @@ const GroupMessage = memo<GroupMessageProps>(
       if (!children || children.length === 0) return [];
       return children.flatMap((child: AssistantContentBlock) => child.fileList || []);
     }, [children]);
-    const workDisplayAnchorAssistantMessageIds = useMemo(
-      () => [id, ...(children?.map((child: AssistantContentBlock) => child.id) ?? [])],
-      [children, id],
+    const workRootOperationId = useMemo(
+      () => findLatestWorkRootOperationId(metadata, children, taskCompletions),
+      [children, metadata, taskCompletions],
     );
 
     const isInbox = useAgentStore(builtinAgentSelectors.isInboxAgent);
@@ -266,10 +285,7 @@ const GroupMessage = memo<GroupMessageProps>(
           <Usage model={model} performance={performance} provider={provider!} usage={usage} />
         )}
         {footerRender}
-        <MessageWorks
-          displayAnchorAssistantMessageIds={workDisplayAnchorAssistantMessageIds}
-          messageId={id}
-        />
+        <MessageWorks rootOperationId={workRootOperationId} />
         {reactions.length > 0 && (
           <ReactionDisplay
             isActive={isReactionActive}

@@ -126,13 +126,6 @@ export const workContexts = pgTable(
     sourceMessageId: text('source_message_id').references(() => messages.id, {
       onDelete: 'set null',
     }),
-    /** Assistant message after which the Work footer should be rendered. */
-    displayAnchorAssistantMessageId: text('display_anchor_assistant_message_id').references(
-      () => messages.id,
-      {
-        onDelete: 'set null',
-      },
-    ),
     /** Root runtime operation that groups all contexts created during one assistant run. */
     rootOperationId: text('root_operation_id'),
     /** Runtime tool-call id that produced this context, used to dedupe repeated registration. */
@@ -155,9 +148,6 @@ export const workContexts = pgTable(
     index('work_contexts_topic_id_idx').on(t.topicId),
     index('work_contexts_thread_id_idx').on(t.threadId),
     index('work_contexts_source_message_id_idx').on(t.sourceMessageId),
-    index('work_contexts_display_anchor_assistant_message_id_idx').on(
-      t.displayAnchorAssistantMessageId,
-    ),
     index('work_contexts_root_operation_id_idx').on(t.rootOperationId),
     index('work_contexts_user_id_idx').on(t.userId),
     index('work_contexts_workspace_id_idx').on(t.workspaceId),

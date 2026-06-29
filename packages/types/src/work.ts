@@ -82,7 +82,6 @@ export interface WorkVersionItem {
 export interface WorkContextItem {
   actorAgentId: string | null;
   createdAt: Date;
-  displayAnchorAssistantMessageId: string | null;
   id: string;
   role: WorkContextRole;
   rootOperationId: string | null;
@@ -109,7 +108,6 @@ export interface TaskWorkContextVersionItem extends TaskWorkListItem {
   context: Pick<
     WorkContextItem,
     | 'createdAt'
-    | 'displayAnchorAssistantMessageId'
     | 'id'
     | 'role'
     | 'rootOperationId'
@@ -121,13 +119,14 @@ export interface TaskWorkContextVersionItem extends TaskWorkListItem {
   version: Pick<WorkVersionItem, 'createdAt' | 'id' | 'title' | 'version'>;
 }
 
+export type TaskWorkContextVersionMap = Record<string, TaskWorkContextVersionItem[]>;
+
 export interface WorkVersionListItem extends WorkVersionItem {
   context?: Pick<WorkContextItem, 'createdAt' | 'id' | 'role' | 'source' | 'sourceType'> | null;
 }
 
 export interface RegisterTaskWorkParams {
   actorAgentId?: string | null;
-  displayAnchorAssistantMessageId?: string | null;
   role: Extract<WorkContextRole, 'created' | 'updated'>;
   rootOperationId?: string | null;
   source: string;

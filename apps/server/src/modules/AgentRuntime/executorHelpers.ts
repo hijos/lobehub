@@ -95,36 +95,6 @@ export const attachWorkSourceMessage = async ({
   }
 };
 
-export const attachWorkDisplayAnchorAssistantMessage = async ({
-  displayAnchorAssistantMessageId,
-  rootOperationId,
-  serverDB,
-  userId,
-  workspaceId,
-}: {
-  displayAnchorAssistantMessageId?: string;
-  rootOperationId?: string;
-  serverDB: LobeChatDatabase;
-  userId?: string;
-  workspaceId?: string;
-}) => {
-  if (!displayAnchorAssistantMessageId || !rootOperationId || !userId) return;
-
-  try {
-    await new WorkModel(serverDB, userId, workspaceId).attachDisplayAnchorAssistantMessage({
-      displayAnchorAssistantMessageId,
-      rootOperationId,
-    });
-  } catch (error) {
-    log(
-      'attachWorkDisplayAnchorAssistantMessage failed for rootOperationId=%s messageId=%s: %O',
-      rootOperationId,
-      displayAnchorAssistantMessageId,
-      error,
-    );
-  }
-};
-
 // Builds a postProcessUrl callback that resolves keys in file-backed fields
 // (imageList, videoList, fileList) to externally accessible URLs. Must be
 // passed to every messageModel.query() call whose output is later fed to the

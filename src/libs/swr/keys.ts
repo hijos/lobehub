@@ -172,10 +172,6 @@ export const taskKeys = {
 
 // ---- work ---------------------------------------------------------------
 export const workKeys = {
-  displayAnchorAssistantMessage: def(
-    'work:displayAnchorAssistantMessage',
-    (messageId: string | string[]) => ['work:displayAnchorAssistantMessage', messageId],
-  ),
   conversation: def('work:conversation', (topicId: string, threadId?: string | null) => [
     'work:conversation',
     topicId,
@@ -184,6 +180,10 @@ export const workKeys = {
   rootOperation: def('work:rootOperation', (rootOperationId: string) => [
     'work:rootOperation',
     rootOperationId,
+  ]),
+  rootOperations: def('work:rootOperations', (rootOperationIds: string[]) => [
+    'work:rootOperations',
+    rootOperationIds,
   ]),
   versions: def('work:versions', (workId: string) => ['work:versions', workId]),
 };

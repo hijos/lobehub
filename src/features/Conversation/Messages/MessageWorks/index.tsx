@@ -1,20 +1,24 @@
 'use client';
 
-import type { TaskWorkContextVersionItem } from '@lobechat/types';
+import type {
+  AssistantContentBlock,
+  TaskWorkContextVersionItem,
+  TaskWorkContextVersionMap,
+  UIChatMessage,
+} from '@lobechat/types';
 import { Flexbox, Text } from '@lobehub/ui';
 import { createStaticStyles } from 'antd-style';
 import isEqual from 'fast-deep-equal';
 import { ClipboardListIcon } from 'lucide-react';
-import { memo, useEffect, useMemo, useRef } from 'react';
+import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useNavigateToTaskDetail } from '@/features/AgentTasks/shared/taskDetailPath';
 import { useClientDataSWR } from '@/libs/swr';
 import { workKeys } from '@/libs/swr/keys';
 import { workService } from '@/services/work';
-import { useChatStore } from '@/store/chat';
-import type { Operation } from '@/store/chat/slices/operation/types';
-import { AI_RUNTIME_OPERATION_TYPES } from '@/store/chat/slices/operation/types';
+
+import { dataSelectors, useConversationStore } from '../../store';
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
   container: css`
@@ -52,94 +56,79 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
   `,
 }));
 
-interface OperationState {
-  operations: Record<string, Operation>;
-  operationsByMessage: Record<string, string[]>;
-}
+const getOperationFinalRootId = (metadata?: { work?: { rootOperationId?: unknown } } | null) =>
+  typeof metadata?.work?.rootOperationId === 'string' ? metadata.work.rootOperationId : undefined;
 
-const findRootRuntimeOperationId = (
-  operationId: string | undefined,
-  operations: Record<string, Operation>,
-): string | undefined => {
-  let current = operationId ? operations[operationId] : undefined;
-  const visited = new Set<string>();
-
-  while (current && !visited.has(current.id)) {
-    if (AI_RUNTIME_OPERATION_TYPES.includes(current.type)) return current.id;
-
-    visited.add(current.id);
-    current = current.parentOperationId ? operations[current.parentOperationId] : undefined;
-  }
-
-  return undefined;
+const addRootId = (rootOperationIds: Set<string>, rootOperationId?: string) => {
+  if (rootOperationId) rootOperationIds.add(rootOperationId);
 };
 
-const isTerminal = (operation?: Operation) =>
-  operation?.status === 'cancelled' ||
-  operation?.status === 'completed' ||
-  operation?.status === 'failed';
+const collectBlockWorkRootIds = (block: AssistantContentBlock, rootOperationIds: Set<string>) => {
+  addRootId(rootOperationIds, getOperationFinalRootId(block.metadata));
+
+  for (const message of block.council ?? []) {
+    collectMessageWorkRootIds(message, rootOperationIds);
+  }
+};
+
+const collectMessageWorkRootIds = (message: UIChatMessage, rootOperationIds: Set<string>) => {
+  addRootId(rootOperationIds, getOperationFinalRootId(message.metadata));
+
+  for (const block of message.children ?? []) {
+    collectBlockWorkRootIds(block, rootOperationIds);
+  }
+
+  for (const block of message.taskCompletions ?? []) {
+    collectBlockWorkRootIds(block, rootOperationIds);
+  }
+
+  for (const child of message.compressedMessages ?? []) {
+    collectMessageWorkRootIds(child, rootOperationIds);
+  }
+
+  for (const member of message.members ?? []) {
+    collectMessageWorkRootIds(member, rootOperationIds);
+  }
+
+  for (const task of message.tasks ?? []) {
+    collectMessageWorkRootIds(task, rootOperationIds);
+  }
+};
+
+const collectWorkRootOperationIds = (messages: UIChatMessage[]) => {
+  const rootOperationIds = new Set<string>();
+  for (const message of messages) {
+    collectMessageWorkRootIds(message, rootOperationIds);
+  }
+  return Array.from(rootOperationIds).sort();
+};
 
 interface MessageWorksProps {
-  displayAnchorAssistantMessageIds?: string[];
-  messageId: string;
+  rootOperationId?: string | null;
 }
 
-const MessageWorks = memo<MessageWorksProps>(({ displayAnchorAssistantMessageIds, messageId }) => {
+const MessageWorks = memo<MessageWorksProps>(({ rootOperationId }) => {
   const { t } = useTranslation('chat');
   const navigateToTask = useNavigateToTaskDetail();
-  const refreshedTerminalOperationRef = useRef<string | undefined>(undefined);
-  const operationState = useChatStore(
-    (s) => ({
-      operations: s.operations,
-      operationsByMessage: s.operationsByMessage,
-    }),
-    isEqual,
+  const displayMessages = useConversationStore(dataSelectors.displayMessages, isEqual);
+  const rootOperationIds = useMemo(
+    () => collectWorkRootOperationIds(displayMessages),
+    [displayMessages],
   );
 
-  const resolvedDisplayAnchorAssistantMessageIds = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          displayAnchorAssistantMessageIds?.length ? displayAnchorAssistantMessageIds : [messageId],
-        ),
-      ),
-    [displayAnchorAssistantMessageIds, messageId],
-  );
-
-  const rootOperationId = useMemo(() => {
-    const operationIds = resolvedDisplayAnchorAssistantMessageIds.flatMap(
-      (id) => operationState.operationsByMessage[id] ?? [],
-    );
-
-    for (let index = operationIds.length - 1; index >= 0; index -= 1) {
-      const rootId = findRootRuntimeOperationId(operationIds[index], operationState.operations);
-      if (rootId) return rootId;
-    }
-
-    return undefined;
-  }, [operationState, resolvedDisplayAnchorAssistantMessageIds]);
-
-  const { data = [] } = useClientDataSWR<TaskWorkContextVersionItem[]>(
-    workKeys.displayAnchorAssistantMessage(resolvedDisplayAnchorAssistantMessageIds),
-    () =>
-      workService.listByDisplayAnchorAssistantMessage({
-        displayAnchorAssistantMessageIds: resolvedDisplayAnchorAssistantMessageIds,
-      }),
+  const { data: workVersionMap = {} } = useClientDataSWR<TaskWorkContextVersionMap>(
+    rootOperationId && rootOperationIds.length > 0
+      ? workKeys.rootOperations(rootOperationIds)
+      : null,
+    () => workService.listByRootOperations({ rootOperationIds }),
     {
-      fallbackData: [],
+      fallbackData: {},
       revalidateOnFocus: false,
     },
   );
-
-  useEffect(() => {
-    if (!rootOperationId || !isTerminal(operationState.operations[rootOperationId])) return;
-    if (refreshedTerminalOperationRef.current === rootOperationId) return;
-
-    refreshedTerminalOperationRef.current = rootOperationId;
-    void workService.refreshDisplayAnchorAssistantMessages(
-      resolvedDisplayAnchorAssistantMessageIds,
-    );
-  }, [operationState.operations, resolvedDisplayAnchorAssistantMessageIds, rootOperationId]);
+  const data: TaskWorkContextVersionItem[] = rootOperationId
+    ? (workVersionMap[rootOperationId] ?? [])
+    : [];
 
   if (data.length === 0) return null;
 

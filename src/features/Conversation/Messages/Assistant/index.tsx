@@ -134,7 +134,7 @@ const AssistantMessage = memo<AssistantMessageProps>(
               usage={usage! || metadata}
             />
             {footerRender}
-            <MessageWorks messageId={id} />
+            <MessageWorks rootOperationId={metadata?.work?.rootOperationId} />
           </>
         }
         onDoubleClick={onDoubleClick}

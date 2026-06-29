@@ -87,7 +87,6 @@ import { nanoid } from '@/utils/uuid';
 
 import { type RuntimeExecutorContext } from '../context';
 import {
-  attachWorkDisplayAnchorAssistantMessage,
   buildPostProcessUrl,
   buildToolDiscoveryConfig,
   isOperationInterrupted,
@@ -1568,6 +1567,28 @@ export const callLlm =
                 if (answerSalvagedFromReasoning) {
                   metadata.answerSalvagedFromReasoning = true;
                 }
+                const sourceMessageId = state.metadata?.sourceMessageId;
+                const sourceMessageIndex =
+                  typeof sourceMessageId === 'string'
+                    ? state.messages.findIndex((message) => message.id === sourceMessageId)
+                    : -1;
+                const currentOperationMessages =
+                  sourceMessageIndex >= 0 ? state.messages.slice(sourceMessageIndex + 1) : [];
+                const hasPriorToolInteraction = currentOperationMessages.some(
+                  (message) =>
+                    message.role === 'tool' ||
+                    (Array.isArray(message.tool_calls) && message.tool_calls.length > 0),
+                );
+                if (
+                  toolsCalling.length === 0 &&
+                  tool_calls.length === 0 &&
+                  hasPriorToolInteraction
+                ) {
+                  metadata.work = {
+                    rootOperationId: operationId,
+                    ...(typeof sourceMessageId === 'string' && { userMessageId: sourceMessageId }),
+                  };
+                }
 
                 // Sanitize tool_call `arguments` before persisting to DB so malformed
                 // JSON (e.g. Qwen emitting `{, ...}`) can't poison future context
@@ -1587,13 +1608,6 @@ export const callLlm =
                   reasoning: finalReasoning,
                   search: grounding,
                   tools: persistedTools,
-                });
-                await attachWorkDisplayAnchorAssistantMessage({
-                  displayAnchorAssistantMessageId: assistantMessageItem.id,
-                  rootOperationId: operationId,
-                  serverDB: ctx.serverDB,
-                  userId: ctx.userId,
-                  workspaceId: state.metadata?.workspaceId ?? ctx.workspaceId,
                 });
               } catch (error) {
                 console.error('[call_llm] Failed to update message:', error);

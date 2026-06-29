@@ -5,7 +5,6 @@ import { RequestTrigger } from '@lobechat/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { chatService } from '@/services/chat';
-import { workService } from '@/services/work';
 import { createAgentExecutors } from '@/store/chat/agents/createAgentExecutors';
 
 import {
@@ -33,13 +32,6 @@ vi.mock('@/services/chat', () => ({
 vi.mock('@/services/message', () => ({
   messageService: {
     updateMessage: vi.fn(),
-  },
-}));
-
-vi.mock('@/services/work', () => ({
-  workService: {
-    attachDisplayAnchorAssistantMessage: vi.fn().mockResolvedValue(1),
-    refreshDisplayAnchorAssistantMessage: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -147,12 +139,13 @@ describe('call_llm executor', () => {
       );
     });
 
-    it('should attach work display anchor when the runtime operation has tool calls', async () => {
+    it('should mark work metadata when the runtime operation final assistant follows tool calls', async () => {
       const mockStore = createMockStore();
       const parentMessage = createUserMessage({ id: 'msg_parent_after_tool' });
       const context = createTestContext({
         operationId: 'op_root_runtime',
         parentId: parentMessage.id,
+        userMessageId: parentMessage.id,
       });
       mockStore.operations[context.operationId] = {
         abortController: new AbortController(),
@@ -198,18 +191,16 @@ describe('call_llm executor', () => {
         context,
       });
 
-      const assistantMessage = await vi.mocked(mockStore.optimisticCreateMessage).mock.results[0]
-        .value;
-      expect(workService.attachDisplayAnchorAssistantMessage).toHaveBeenCalledWith({
-        displayAnchorAssistantMessageId: assistantMessage.id,
-        rootOperationId: 'op_root_runtime',
+      const contentUpdate = vi.mocked(mockStore.optimisticUpdateMessageContent).mock.calls.at(-1);
+      expect(contentUpdate?.[2]?.metadata).toMatchObject({
+        work: {
+          rootOperationId: 'op_root_runtime',
+          userMessageId: parentMessage.id,
+        },
       });
-      expect(workService.refreshDisplayAnchorAssistantMessage).toHaveBeenCalledWith(
-        assistantMessage.id,
-      );
     });
 
-    it('should not attach work display anchor when assistant message follows a user message', async () => {
+    it('should not mark work metadata when assistant message follows a user message', async () => {
       const mockStore = createMockStore();
       const userMessage = createUserMessage({ id: 'msg_user_parent' });
       const context = createTestContext({
@@ -233,7 +224,8 @@ describe('call_llm executor', () => {
         context,
       });
 
-      expect(workService.attachDisplayAnchorAssistantMessage).not.toHaveBeenCalled();
+      const contentUpdate = vi.mocked(mockStore.optimisticUpdateMessageContent).mock.calls.at(-1);
+      expect(contentUpdate?.[2]?.metadata?.work).toBeUndefined();
     });
 
     it('should call chatService.createAssistantMessageStream with correct params', async () => {

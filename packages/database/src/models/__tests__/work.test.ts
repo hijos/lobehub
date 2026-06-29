@@ -60,7 +60,6 @@ describe('WorkModel', () => {
     ]);
 
     const work = await workModel.registerTask({
-      displayAnchorAssistantMessageId: 'msg-assistant',
       role: 'created',
       rootOperationId: 'op-root',
       source: 'createTask',
@@ -97,36 +96,30 @@ describe('WorkModel', () => {
       .from(workContexts)
       .where(eq(workContexts.workId, work!.id));
     expect(context).toMatchObject({
-      displayAnchorAssistantMessageId: 'msg-assistant',
       rootOperationId: 'op-root',
       sourceMessageId: 'msg-tool',
       sourceToolCallId: 'tool-call-create',
     });
 
-    const byAnchorMessage = await workModel.listByDisplayAnchorAssistantMessage({
-      displayAnchorAssistantMessageId: 'msg-assistant',
+    const byOperation = await workModel.listByRootOperation({ rootOperationId: 'op-root' });
+    expect(byOperation).toHaveLength(1);
+    expect(byOperation[0].id).toBe(work?.id);
+
+    const byOperations = await workModel.listByRootOperations({
+      rootOperationIds: ['op-missing', 'op-root'],
     });
-    expect(byAnchorMessage).toHaveLength(1);
-    expect(byAnchorMessage[0]).toMatchObject({
+    expect(byOperations['op-root']).toHaveLength(1);
+    expect(byOperations['op-root']?.[0]).toMatchObject({
       context: expect.objectContaining({
-        displayAnchorAssistantMessageId: 'msg-assistant',
         rootOperationId: 'op-root',
         sourceMessageId: 'msg-tool',
       }),
       id: work?.id,
     });
-
-    const byAnchorMessages = await workModel.listByDisplayAnchorAssistantMessage({
-      displayAnchorAssistantMessageIds: ['msg-missing', 'msg-assistant'],
-    });
-    expect(byAnchorMessages).toHaveLength(1);
-
-    const byOperation = await workModel.listByRootOperation({ rootOperationId: 'op-root' });
-    expect(byOperation).toHaveLength(1);
-    expect(byOperation[0].id).toBe(work?.id);
+    expect(byOperations['op-missing']).toEqual([]);
   });
 
-  it('attaches pending tool contexts to the next assistant message within one operation', async () => {
+  it('groups context versions by root operation', async () => {
     const taskModel = new TaskModel(serverDB, userId);
     const workModel = new WorkModel(serverDB, userId);
     const firstTask = await taskModel.create({
@@ -137,74 +130,31 @@ describe('WorkModel', () => {
       instruction: 'Second tool work',
       name: 'Second work',
     });
-    await serverDB.insert(messages).values([
-      {
-        content: '',
-        id: 'msg-assistant-after-tool-1',
-        role: 'assistant',
-        topicId,
-        userId,
-      },
-      {
-        content: '',
-        id: 'msg-assistant-after-tool-2',
-        role: 'assistant',
-        topicId,
-        userId,
-      },
-    ]);
 
     await workModel.registerTask({
       role: 'created',
-      rootOperationId: 'op-sequential-tools',
+      rootOperationId: 'op-first',
       source: 'createTask',
       sourceToolCallId: 'tool-call-1',
       taskId: firstTask.id,
       topicId,
     });
-    await workModel.attachDisplayAnchorAssistantMessage({
-      displayAnchorAssistantMessageId: 'msg-assistant-after-tool-1',
-      rootOperationId: 'op-sequential-tools',
-    });
-
     await workModel.registerTask({
       role: 'created',
-      rootOperationId: 'op-sequential-tools',
+      rootOperationId: 'op-second',
       source: 'createTask',
       sourceToolCallId: 'tool-call-2',
       taskId: secondTask.id,
       topicId,
     });
-    await workModel.attachDisplayAnchorAssistantMessage({
-      displayAnchorAssistantMessageId: 'msg-assistant-after-tool-2',
-      rootOperationId: 'op-sequential-tools',
+
+    const byOperations = await workModel.listByRootOperations({
+      rootOperationIds: ['op-missing', 'op-second', 'op-first', 'op-first'],
     });
 
-    const contexts = await serverDB
-      .select({
-        displayAnchorAssistantMessageId: workContexts.displayAnchorAssistantMessageId,
-        sourceToolCallId: workContexts.sourceToolCallId,
-      })
-      .from(workContexts)
-      .where(eq(workContexts.rootOperationId, 'op-sequential-tools'));
-
-    expect(
-      Object.fromEntries(
-        contexts.map((item) => [item.sourceToolCallId, item.displayAnchorAssistantMessageId]),
-      ),
-    ).toEqual({
-      'tool-call-1': 'msg-assistant-after-tool-1',
-      'tool-call-2': 'msg-assistant-after-tool-2',
-    });
-
-    const firstAnchorWorks = await workModel.listByDisplayAnchorAssistantMessage({
-      displayAnchorAssistantMessageId: 'msg-assistant-after-tool-1',
-    });
-    const secondAnchorWorks = await workModel.listByDisplayAnchorAssistantMessage({
-      displayAnchorAssistantMessageId: 'msg-assistant-after-tool-2',
-    });
-    expect(firstAnchorWorks.map((item) => item.resourceId)).toEqual([firstTask.id]);
-    expect(secondAnchorWorks.map((item) => item.resourceId)).toEqual([secondTask.id]);
+    expect(byOperations['op-first']?.map((item) => item.resourceId)).toEqual([firstTask.id]);
+    expect(byOperations['op-second']?.map((item) => item.resourceId)).toEqual([secondTask.id]);
+    expect(byOperations['op-missing']).toEqual([]);
   });
 
   it('keeps one work row and appends versions for task edits', async () => {

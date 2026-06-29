@@ -39,7 +39,6 @@ import { aiAgentService } from '@/services/aiAgent';
 import { chatService } from '@/services/chat';
 import { type ResolvedAgentConfig } from '@/services/chat/mecha';
 import { messageService } from '@/services/message';
-import { workService } from '@/services/work';
 import { type ChatStore } from '@/store/chat/store';
 import { getCompressionCandidateMessageIds } from '@/store/chat/utils/compression';
 import { getFileStoreState } from '@/store/file/store';
@@ -165,6 +164,7 @@ export const createAgentExecutors = (context: {
   skipCreateFirstMessage?: boolean;
   /** ToolsEngine for expanding dynamically activated tools */
   toolsEngine?: ToolsEngine;
+  userMessageId?: string;
 }) => {
   let shouldSkipCreateMessage = context.skipCreateFirstMessage;
 
@@ -189,26 +189,6 @@ export const createAgentExecutors = (context: {
     }
 
     return false;
-  };
-
-  const attachWorkDisplayAnchorForAssistant = async (assistantMessageId: string) => {
-    if (!hasToolCallingOperation()) return;
-
-    // Example: createTask writes a Work during a tool operation. The next
-    // assistant message may not be the direct child of that tool message, so
-    // anchor unclaimed Works by the root runtime operation instead.
-    try {
-      const updatedCount = await workService.attachDisplayAnchorAssistantMessage({
-        displayAnchorAssistantMessageId: assistantMessageId,
-        rootOperationId: context.operationId,
-      });
-
-      if (updatedCount > 0) {
-        await workService.refreshDisplayAnchorAssistantMessage(assistantMessageId);
-      }
-    } catch (error) {
-      console.error('[Work] Failed to attach display anchor assistant message:', error);
-    }
   };
 
   /**
@@ -580,6 +560,8 @@ export const createAgentExecutors = (context: {
 
           finalUsage = result.usage;
           finalToolCalls = result.toolCalls;
+          const isOperationFinalAssistantMessage =
+            (toolCalls?.length ?? 0) === 0 && hasToolCallingOperation();
 
           await optimisticUpdateMessageContent(
             assistantMessageId,
@@ -596,11 +578,16 @@ export const createAgentExecutors = (context: {
                 usage: result.metadata.usage,
                 finishType: result.metadata.finishType,
                 ...(result.metadata.isMultimodal && { isMultimodal: true }),
+                ...(isOperationFinalAssistantMessage && {
+                  work: {
+                    rootOperationId: context.operationId,
+                    ...(context.userMessageId && { userMessageId: context.userMessageId }),
+                  },
+                }),
               },
             },
             { operationId: context.operationId },
           );
-          await attachWorkDisplayAnchorForAssistant(assistantMessageId);
         },
         onMessageHandle: async (chunk) => {
           handler.handleChunk(chunk as StreamChunk);

@@ -25,7 +25,6 @@ const sourceTypeSchema = z.enum(['import', 'system', 'tool', 'user']);
 
 const registerTaskSchema = z.object({
   actorAgentId: z.string().nullable().optional(),
-  displayAnchorAssistantMessageId: z.string().nullable().optional(),
   role: contextRoleSchema,
   rootOperationId: z.string().nullable().optional(),
   source: z.string().min(1),
@@ -40,25 +39,6 @@ const registerTaskSchema = z.object({
 }) satisfies z.ZodType<RegisterTaskWorkParams>;
 
 export const workRouter = router({
-  attachDisplayAnchorAssistantMessage: workProcedureWrite
-    .input(
-      z.object({
-        displayAnchorAssistantMessageId: z.string().nullable().optional(),
-        rootOperationId: z.string().nullable().optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => ctx.workModel.attachDisplayAnchorAssistantMessage(input)),
-
-  listByDisplayAnchorAssistantMessage: workProcedure
-    .input(
-      z.object({
-        displayAnchorAssistantMessageId: z.string().nullable().optional(),
-        displayAnchorAssistantMessageIds: z.array(z.string()).nullable().optional(),
-        limit: z.number().min(1).max(50).default(20),
-      }),
-    )
-    .query(async ({ ctx, input }) => ctx.workModel.listByDisplayAnchorAssistantMessage(input)),
-
   listByConversation: workProcedure
     .input(
       z.object({
@@ -80,6 +60,20 @@ export const workRouter = router({
       ctx.workModel.listByRootOperation({
         limit: input.limit,
         rootOperationId: input.rootOperationId,
+      }),
+    ),
+
+  listByRootOperations: workProcedure
+    .input(
+      z.object({
+        limit: z.number().min(1).max(50).default(20),
+        rootOperationIds: z.array(z.string()).nullable().optional(),
+      }),
+    )
+    .query(async ({ ctx, input }) =>
+      ctx.workModel.listByRootOperations({
+        limit: input.limit,
+        rootOperationIds: input.rootOperationIds,
       }),
     ),
 

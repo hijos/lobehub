@@ -1150,6 +1150,91 @@ describe('RuntimeExecutors', { timeout: 60_000 }, () => {
       );
     });
 
+    it('marks the final assistant message as the work display anchor after current tool interaction', async () => {
+      const executors = createRuntimeExecutors(ctx);
+      const state = createMockState({
+        messages: [
+          { content: 'Create a task', id: 'user-msg-1', role: 'user' },
+          {
+            content: '',
+            id: 'assistant-tool-msg-1',
+            role: 'assistant',
+            tool_calls: [{ function: { arguments: '{}', name: 'createTask' }, id: 'call_1' }],
+          },
+          { content: 'created', id: 'tool-msg-1', role: 'tool', tool_call_id: 'call_1' },
+        ] as any,
+        metadata: {
+          agentId: 'agent-123',
+          sourceMessageId: 'user-msg-1',
+          threadId: 'thread-123',
+          topicId: 'topic-123',
+        },
+      });
+
+      await executors.call_llm!(
+        {
+          payload: {
+            messages: [{ content: 'Create a task', role: 'user' }],
+            model: 'gpt-4',
+            provider: 'openai',
+            tools: [],
+          },
+          type: 'call_llm' as const,
+        },
+        state,
+      );
+
+      expect(mockMessageModel.update).toHaveBeenCalledWith(
+        'msg-123',
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            work: { rootOperationId: 'op-123', userMessageId: 'user-msg-1' },
+          }),
+        }),
+      );
+    });
+
+    it('does not mark ordinary replies because of older tool calls from another turn', async () => {
+      const executors = createRuntimeExecutors(ctx);
+      const state = createMockState({
+        messages: [
+          { content: 'Old request', id: 'old-user-msg', role: 'user' },
+          {
+            content: '',
+            id: 'old-assistant-tool-msg',
+            role: 'assistant',
+            tool_calls: [{ function: { arguments: '{}', name: 'createTask' }, id: 'old_call' }],
+          },
+          { content: 'old result', id: 'old-tool-msg', role: 'tool', tool_call_id: 'old_call' },
+          { content: 'What model are you?', id: 'user-msg-2', role: 'user' },
+        ] as any,
+        metadata: {
+          agentId: 'agent-123',
+          sourceMessageId: 'user-msg-2',
+          threadId: 'thread-123',
+          topicId: 'topic-123',
+        },
+      });
+
+      await executors.call_llm!(
+        {
+          payload: {
+            messages: [{ content: 'What model are you?', role: 'user' }],
+            model: 'gpt-4',
+            provider: 'openai',
+            tools: [],
+          },
+          type: 'call_llm' as const,
+        },
+        state,
+      );
+
+      const updatePayload = mockMessageModel.update.mock.calls.at(-1)?.[1];
+      // Before the current-turn slice, any historical tool call could make this
+      // unrelated assistant reply render work cards after refresh.
+      expect(updatePayload?.metadata?.work).toBeUndefined();
+    });
+
     // Gemini 2.5+/3 thinking streams deliver assistant text/reasoning as
     // content_part / reasoning_part events instead of plain text / reasoning.
     // These must be captured or the turn finalizes to a blank `done`.

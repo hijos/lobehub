@@ -2,6 +2,7 @@ import type {
   RegisterTaskWorkParams,
   TaskItem,
   TaskWorkContextVersionItem,
+  TaskWorkContextVersionMap,
   TaskWorkListItem,
   TaskWorkVersionSnapshot,
   WorkItem,
@@ -238,7 +239,6 @@ export class WorkModel {
 
           await tx.insert(workContexts).values({
             actorAgentId: params.actorAgentId ?? null,
-            displayAnchorAssistantMessageId: params.displayAnchorAssistantMessageId ?? null,
             role: params.role,
             rootOperationId: params.rootOperationId ?? null,
             source: params.source,
@@ -307,30 +307,6 @@ export class WorkModel {
       .where(and(...filters));
   };
 
-  attachDisplayAnchorAssistantMessage = async (params: {
-    displayAnchorAssistantMessageId?: string | null;
-    rootOperationId?: string | null;
-  }) => {
-    if (!params.displayAnchorAssistantMessageId || !params.rootOperationId) return 0;
-
-    const rows = await this.db
-      .update(workContexts)
-      .set({ displayAnchorAssistantMessageId: params.displayAnchorAssistantMessageId })
-      .where(
-        and(
-          this.contextOwnership(),
-          eq(workContexts.rootOperationId, params.rootOperationId),
-          eq(workContexts.sourceType, 'tool'),
-          isNull(workContexts.displayAnchorAssistantMessageId),
-        ),
-      )
-      .returning({
-        id: workContexts.id,
-      });
-
-    return rows.length;
-  };
-
   private listTaskContextVersions = async (
     filters: SQL[],
     limit = 20,
@@ -370,7 +346,6 @@ export class WorkModel {
       ...row.work,
       context: {
         createdAt: row.context.createdAt,
-        displayAnchorAssistantMessageId: row.context.displayAnchorAssistantMessageId,
         id: row.context.id,
         role: row.context.role,
         rootOperationId: row.context.rootOperationId,
@@ -387,41 +362,47 @@ export class WorkModel {
     }));
   };
 
-  listByDisplayAnchorAssistantMessage = async (params: {
-    displayAnchorAssistantMessageId?: string | null;
-    displayAnchorAssistantMessageIds?: string[] | null;
-    limit?: number;
-  }): Promise<TaskWorkContextVersionItem[]> => {
-    const messageIds = Array.from(
-      new Set(
-        [
-          ...(params.displayAnchorAssistantMessageIds ?? []),
-          params.displayAnchorAssistantMessageId,
-        ].filter(Boolean) as string[],
-      ),
-    );
-    if (messageIds.length === 0) return [];
-
-    return this.listTaskContextVersions(
-      [
-        messageIds.length === 1
-          ? eq(workContexts.displayAnchorAssistantMessageId, messageIds[0])
-          : inArray(workContexts.displayAnchorAssistantMessageId, messageIds),
-      ],
-      params.limit ?? 20,
-    );
-  };
-
   listByRootOperation = async (params: {
     limit?: number;
     rootOperationId?: string | null;
   }): Promise<TaskWorkContextVersionItem[]> => {
     if (!params.rootOperationId) return [];
 
-    return this.listTaskContextVersions(
-      [eq(workContexts.rootOperationId, params.rootOperationId)],
-      params.limit ?? 20,
+    const map = await this.listByRootOperations({
+      limit: params.limit,
+      rootOperationIds: [params.rootOperationId],
+    });
+
+    return map[params.rootOperationId] ?? [];
+  };
+
+  listByRootOperations = async (params: {
+    limit?: number;
+    rootOperationIds?: string[] | null;
+  }): Promise<TaskWorkContextVersionMap> => {
+    const rootOperationIds = Array.from(
+      new Set((params.rootOperationIds ?? []).filter((id): id is string => !!id)),
+    ).sort();
+    if (rootOperationIds.length === 0) return {};
+
+    const limit = params.limit ?? 20;
+    const result: TaskWorkContextVersionMap = {};
+    const entries = await Promise.all(
+      rootOperationIds.map(async (rootOperationId) => {
+        const items = await this.listTaskContextVersions(
+          [eq(workContexts.rootOperationId, rootOperationId)],
+          limit,
+        );
+
+        return [rootOperationId, items] as const;
+      }),
     );
+
+    for (const [rootOperationId, items] of entries) {
+      result[rootOperationId] = items;
+    }
+
+    return result;
   };
 
   listByConversation = async (params: {

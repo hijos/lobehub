@@ -3,6 +3,7 @@ import type {
   TaskWorkContextVersionItem,
   TaskWorkContextVersionMap,
   TaskWorkListItem,
+  UpdateWorkVersionCumulativeUsageParams,
   WorkItem,
   WorkVersionListItem,
 } from '@lobechat/types';
@@ -33,6 +34,10 @@ class WorkService {
 
   registerTask = async (params: RegisterTaskWorkParams): Promise<WorkItem | null> =>
     lambdaClient.work.registerTask.mutate(params);
+
+  updateVersionCumulativeUsage = async (
+    params: UpdateWorkVersionCumulativeUsageParams,
+  ): Promise<void> => lambdaClient.work.updateVersionCumulativeUsage.mutate(params);
 
   refreshConversation = async (topicId?: string | null, threadId?: string | null) => {
     if (!topicId) return;

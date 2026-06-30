@@ -37,6 +37,7 @@ import {
   log,
   TOOL_MAX_RETRIES,
   TOOL_PRICING,
+  updateWorkVersionCumulativeUsage,
 } from '../executorHelpers';
 import { formatErrorEventData } from '../formatErrorEventData';
 import {
@@ -558,6 +559,15 @@ export const callToolsBatch =
         });
         newState.usage = usage;
         if (cost) newState.cost = cost;
+
+        await updateWorkVersionCumulativeUsage({
+          rootOperationId: operationId,
+          serverDB: ctx.serverDB,
+          sourceToolCallId: result.toolCallId,
+          state: newState,
+          userId: ctx.userId,
+          workspaceId: state.metadata?.workspaceId ?? ctx.workspaceId,
+        });
       }
     }
 

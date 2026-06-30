@@ -17,6 +17,7 @@ import { useNavigateToTaskDetail } from '@/features/AgentTasks/shared/taskDetail
 import { useClientDataSWR } from '@/libs/swr';
 import { workKeys } from '@/libs/swr/keys';
 import { workService } from '@/services/work';
+import { formatWorkVersionCost } from '@/utils/workVersionCost';
 
 import { dataSelectors, useConversationStore } from '../../store';
 
@@ -53,6 +54,10 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
     min-width: 0;
     font-size: 13px;
     font-weight: 500;
+  `,
+  versionCost: css`
+    flex-shrink: 0;
+    color: ${cssVar.colorTextTertiary};
   `,
 }));
 
@@ -139,6 +144,7 @@ const MessageWorks = memo<MessageWorksProps>(({ rootOperationId }) => {
         <Text type={'secondary'}>{t('workingPanel.works.title')}</Text>
       </Flexbox>
       {data.map((item) => {
+        const cost = formatWorkVersionCost(item.version.cumulativeCost);
         const taskIdentifier = item.resourceIdentifier ?? item.resourceId;
 
         return (
@@ -159,9 +165,19 @@ const MessageWorks = memo<MessageWorksProps>(({ rootOperationId }) => {
             <Text code fontSize={12} style={{ flexShrink: 0 }}>
               {taskIdentifier}
             </Text>
-            <Text ellipsis className={styles.title}>
+            <Text ellipsis className={styles.title} style={{ flex: 1 }}>
               {item.version.title || item.title}
             </Text>
+            {cost && (
+              <Text
+                code
+                className={styles.versionCost}
+                fontSize={12}
+                title={t('workingPanel.works.cumulativeCost', { cost })}
+              >
+                {cost}
+              </Text>
+            )}
           </Flexbox>
         );
       })}

@@ -49,6 +49,12 @@ export interface WorkVersionMetadata {
   changeSummary?: string;
 }
 
+export interface WorkVersionCumulativeUsage {
+  capturedAt: string;
+  cost?: unknown;
+  usage?: unknown;
+}
+
 export interface WorkItem {
   createdAt: Date;
   currentVersionId: string | null;
@@ -69,6 +75,8 @@ export interface WorkVersionItem {
   contentRef: string | null;
   contentRefType: WorkContentRefType | null;
   createdAt: Date;
+  cumulativeCost: number | null;
+  cumulativeUsage: WorkVersionCumulativeUsage | null;
   id: string;
   metadata: WorkVersionMetadata | null;
   renderType: WorkRenderType;
@@ -116,7 +124,7 @@ export interface TaskWorkContextVersionItem extends TaskWorkListItem {
     | 'sourceToolCallId'
     | 'sourceType'
   >;
-  version: Pick<WorkVersionItem, 'createdAt' | 'id' | 'title' | 'version'>;
+  version: Pick<WorkVersionItem, 'createdAt' | 'cumulativeCost' | 'id' | 'title' | 'version'>;
 }
 
 export type TaskWorkContextVersionMap = Record<string, TaskWorkContextVersionItem[]>;
@@ -138,4 +146,11 @@ export interface RegisterTaskWorkParams {
   threadId?: string | null;
   title?: string | null;
   topicId?: string | null;
+}
+
+export interface UpdateWorkVersionCumulativeUsageParams {
+  cumulativeCost?: number | null;
+  cumulativeUsage?: WorkVersionCumulativeUsage | null;
+  rootOperationId?: string | null;
+  sourceToolCallId?: string | null;
 }

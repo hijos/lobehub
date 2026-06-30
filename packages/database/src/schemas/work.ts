@@ -6,6 +6,7 @@ import type {
   WorkSourceType,
   WorkStatus,
   WorkType,
+  WorkVersionCumulativeUsage,
   WorkVersionMetadata,
   WorkVersionSnapshot,
   WorkVisibility,
@@ -14,7 +15,7 @@ import { isNotNull, isNull } from 'drizzle-orm';
 import { index, integer, jsonb, pgTable, text, uniqueIndex } from 'drizzle-orm/pg-core';
 
 import { idGenerator } from '../utils/idGenerator';
-import { createdAt, updatedAt } from './_helpers';
+import { amountNumeric, createdAt, updatedAt } from './_helpers';
 import { agents } from './agent';
 import { messages } from './message';
 import { threads, topics } from './topic';
@@ -87,6 +88,14 @@ export const workVersions = pgTable(
     snapshot: jsonb('snapshot').$type<WorkVersionSnapshot>().notNull(),
     thumbnail: text('thumbnail'),
     metadata: jsonb('metadata').$type<WorkVersionMetadata>(),
+    /**
+     * Cumulative operation cost in USD when this version is produced.
+     * For example, one operation may create Work A at $0.03 and Work B later at $0.05.
+     * These are cumulative snapshots, not exclusive Work costs.
+     */
+    cumulativeCost: amountNumeric('cumulative_cost'),
+    /** Runtime usage/cost detail captured with `cumulativeCost`, including tokens and breakdowns. */
+    cumulativeUsage: jsonb('cumulative_usage').$type<WorkVersionCumulativeUsage>(),
     createdAt: createdAt(),
   },
   (t) => [

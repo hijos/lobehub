@@ -1,4 +1,8 @@
-import type { RegisterTaskWorkParams } from '@lobechat/types';
+import type {
+  RegisterTaskWorkParams,
+  UpdateWorkVersionCumulativeUsageParams,
+  WorkVersionCumulativeUsage,
+} from '@lobechat/types';
 import { z } from 'zod';
 
 import { withScopedPermission } from '@/business/server/trpc-middlewares/rbacPermission';
@@ -37,6 +41,19 @@ const registerTaskSchema = z.object({
   title: z.string().nullable().optional(),
   topicId: z.string().nullable().optional(),
 }) satisfies z.ZodType<RegisterTaskWorkParams>;
+
+const cumulativeUsageSchema = z.object({
+  capturedAt: z.string(),
+  cost: z.unknown().optional(),
+  usage: z.unknown().optional(),
+}) satisfies z.ZodType<WorkVersionCumulativeUsage>;
+
+const updateVersionCumulativeUsageSchema = z.object({
+  cumulativeCost: z.number().nullable().optional(),
+  cumulativeUsage: cumulativeUsageSchema.nullable().optional(),
+  rootOperationId: z.string().nullable().optional(),
+  sourceToolCallId: z.string().nullable().optional(),
+}) satisfies z.ZodType<UpdateWorkVersionCumulativeUsageParams>;
 
 export const workRouter = router({
   listByConversation: workProcedure
@@ -84,4 +101,8 @@ export const workRouter = router({
   registerTask: workProcedureWrite
     .input(registerTaskSchema)
     .mutation(async ({ ctx, input }) => ctx.workModel.registerTask(input)),
+
+  updateVersionCumulativeUsage: workProcedureWrite
+    .input(updateVersionCumulativeUsageSchema)
+    .mutation(async ({ ctx, input }) => ctx.workModel.updateVersionCumulativeUsage(input)),
 });

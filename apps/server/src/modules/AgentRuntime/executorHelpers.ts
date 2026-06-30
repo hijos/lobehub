@@ -14,6 +14,7 @@ import {
   type ToolExecutionResultResponse,
 } from '@/server/services/toolExecution';
 import { archiveToolResultIfNeeded } from '@/server/services/toolExecution/archiveToolResult';
+import { buildWorkVersionCumulativeUsage } from '@/utils/workCumulativeUsage';
 
 import { type RuntimeExecutorContext } from './context';
 
@@ -92,6 +93,34 @@ export const attachWorkSourceMessage = async ({
     });
   } catch (error) {
     log('attachWorkSourceMessage failed for toolCallId=%s: %O', sourceToolCallId, error);
+  }
+};
+
+export const updateWorkVersionCumulativeUsage = async ({
+  rootOperationId,
+  serverDB,
+  sourceToolCallId,
+  state,
+  userId,
+  workspaceId,
+}: {
+  rootOperationId?: string;
+  serverDB: LobeChatDatabase;
+  sourceToolCallId?: string;
+  state: Pick<AgentState, 'cost' | 'usage'>;
+  userId?: string;
+  workspaceId?: string;
+}) => {
+  if (!rootOperationId || !sourceToolCallId || !userId) return;
+
+  try {
+    await new WorkModel(serverDB, userId, workspaceId).updateVersionCumulativeUsage({
+      rootOperationId,
+      sourceToolCallId,
+      ...buildWorkVersionCumulativeUsage({ cost: state.cost, usage: state.usage }),
+    });
+  } catch (error) {
+    log('updateWorkVersionCumulativeUsage failed for toolCallId=%s: %O', sourceToolCallId, error);
   }
 };
 

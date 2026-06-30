@@ -1387,6 +1387,7 @@
   "workingPanel.skills.title": "技能",
   "workingPanel.space": "空间",
   "workingPanel.title": "工作面板",
+  "workingPanel.works.cumulativeCost": "累计成本：{{cost}}",
   "workingPanel.works.empty": "当前会话暂无产物",
   "workingPanel.works.emptyVersions": "暂无版本",
   "workingPanel.works.error": "产物加载失败",

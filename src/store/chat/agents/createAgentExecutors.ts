@@ -7,6 +7,7 @@ import type {
   AgentInstructionExecSubAgent,
   AgentInstructionExecSubAgents,
   AgentRuntimeContext,
+  AgentState,
   GeneralAgentCallingToolInstructionPayload,
   GeneralAgentCallLLMInstructionPayload,
   GeneralAgentCallLLMResultPayload,
@@ -39,10 +40,12 @@ import { aiAgentService } from '@/services/aiAgent';
 import { chatService } from '@/services/chat';
 import { type ResolvedAgentConfig } from '@/services/chat/mecha';
 import { messageService } from '@/services/message';
+import { workService } from '@/services/work';
 import { type ChatStore } from '@/store/chat/store';
 import { getCompressionCandidateMessageIds } from '@/store/chat/utils/compression';
 import { getFileStoreState } from '@/store/file/store';
 import { sleep } from '@/utils/sleep';
+import { buildWorkVersionCumulativeUsage } from '@/utils/workCumulativeUsage';
 
 import { StreamingHandler } from './StreamingHandler';
 import { type StreamChunk } from './types/streaming';
@@ -53,6 +56,28 @@ const log = debug('lobe-store:agent-executors');
 const TOOL_PRICING: Record<string, number> = {
   'lobe-web-browsing/craw': 0.002,
   'lobe-web-browsing/search': 0.001,
+};
+
+const updateWorkVersionCumulativeUsage = async ({
+  rootOperationId,
+  sourceToolCallId,
+  state,
+}: {
+  rootOperationId?: string;
+  sourceToolCallId?: string;
+  state: Pick<AgentState, 'cost' | 'usage'>;
+}) => {
+  if (!rootOperationId || !sourceToolCallId) return;
+
+  try {
+    await workService.updateVersionCumulativeUsage({
+      rootOperationId,
+      sourceToolCallId,
+      ...buildWorkVersionCumulativeUsage({ cost: state.cost, usage: state.usage }),
+    });
+  } catch (error) {
+    log('updateWorkVersionCumulativeUsage failed for toolCallId=%s: %O', sourceToolCallId, error);
+  }
 };
 
 const isAbortError = (error: unknown, abortController?: AbortController) =>
@@ -1029,6 +1054,12 @@ export const createAgentExecutors = (context: {
 
         newState.usage = usage;
         if (cost) newState.cost = cost;
+
+        await updateWorkVersionCumulativeUsage({
+          rootOperationId: context.operationId,
+          sourceToolCallId: chatToolPayload.id,
+          state: newState,
+        });
 
         // Find current tool statistics
         const currentToolStats = usage.tools.byTool.find((t) => t.name === toolName);

@@ -1361,6 +1361,7 @@ export default {
   'workingPanel.resources.updatedAt': 'Updated {{time}}',
   'workingPanel.resources.viewMode.list': 'List view',
   'workingPanel.resources.viewMode.tree': 'Tree view',
+  'workingPanel.works.cumulativeCost': 'Cumulative cost: {{cost}}',
   'workingPanel.works.empty': 'No works in this conversation yet',
   'workingPanel.works.emptyVersions': 'No versions yet',
   'workingPanel.works.error': 'Failed to load works',

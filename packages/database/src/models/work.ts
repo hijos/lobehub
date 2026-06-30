@@ -5,6 +5,7 @@ import type {
   TaskWorkContextVersionMap,
   TaskWorkListItem,
   TaskWorkVersionSnapshot,
+  UpdateWorkVersionCumulativeUsageParams,
   WorkItem,
   WorkVersionItem,
   WorkVersionListItem,
@@ -307,6 +308,34 @@ export class WorkModel {
       .where(and(...filters));
   };
 
+  updateVersionCumulativeUsage = async (params: UpdateWorkVersionCumulativeUsageParams) => {
+    if (!params.rootOperationId || !params.sourceToolCallId) return;
+
+    const updates: Partial<typeof workVersions.$inferInsert> = {};
+    if (params.cumulativeCost !== undefined) updates.cumulativeCost = params.cumulativeCost;
+    if (params.cumulativeUsage !== undefined) updates.cumulativeUsage = params.cumulativeUsage;
+    if (Object.keys(updates).length === 0) return;
+
+    const rows = await this.db
+      .select({ versionId: workContexts.versionId })
+      .from(workContexts)
+      .where(
+        and(
+          this.contextOwnership(),
+          eq(workContexts.rootOperationId, params.rootOperationId),
+          eq(workContexts.sourceToolCallId, params.sourceToolCallId),
+          isNotNull(workContexts.versionId),
+        ),
+      );
+
+    const versionIds = rows
+      .map((row) => row.versionId)
+      .filter((versionId): versionId is string => !!versionId);
+    if (versionIds.length === 0) return;
+
+    await this.db.update(workVersions).set(updates).where(inArray(workVersions.id, versionIds));
+  };
+
   private listTaskContextVersions = async (
     filters: SQL[],
     limit = 20,
@@ -318,6 +347,7 @@ export class WorkModel {
         taskStatus: tasks.status,
         version: {
           createdAt: workVersions.createdAt,
+          cumulativeCost: workVersions.cumulativeCost,
           id: workVersions.id,
           title: workVersions.title,
           version: workVersions.version,

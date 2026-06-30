@@ -14,6 +14,7 @@ import { useClientDataSWR } from '@/libs/swr';
 import { workKeys } from '@/libs/swr/keys';
 import { workService } from '@/services/work';
 import { useChatStore } from '@/store/chat';
+import { formatWorkVersionCost, getWorkVersionCostRefreshInterval } from '@/utils/workVersionCost';
 
 const TASK_STATUS_SET = new Set<TaskStatus>([
   'backlog',
@@ -69,6 +70,9 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
   versionTitle: css`
     color: ${cssVar.colorTextSecondary};
   `,
+  versionCost: css`
+    color: ${cssVar.colorTextTertiary};
+  `,
   workCard: css`
     overflow: hidden;
     border: 1px solid ${cssVar.colorBorderSecondary};
@@ -88,6 +92,7 @@ const VersionList = memo<{ workId: string }>(({ workId }) => {
     () => workService.listVersions(workId),
     {
       fallbackData: [],
+      refreshInterval: getWorkVersionCostRefreshInterval,
       revalidateOnFocus: false,
     },
   );
@@ -115,6 +120,7 @@ const VersionList = memo<{ workId: string }>(({ workId }) => {
   return (
     <Flexbox className={styles.versionList}>
       {data.map((version) => {
+        const cost = formatWorkVersionCost(version.cumulativeCost);
         const time = formatTaskItemDate(version.createdAt, {
           formatOtherYear: t('time.formatOtherYear', { ns: 'common' }),
           formatThisYear: t('time.formatThisYear', { ns: 'common' }),
@@ -132,11 +138,23 @@ const VersionList = memo<{ workId: string }>(({ workId }) => {
                   {t(`workingPanel.works.role.${version.context?.role ?? 'updated'}` as never)}
                 </Text>
               </Flexbox>
-              {time && (
-                <Text className={styles.context} style={{ flexShrink: 0 }} type={'secondary'}>
-                  {time}
-                </Text>
-              )}
+              <Flexbox horizontal align={'center'} gap={8} style={{ flexShrink: 0 }}>
+                {cost && (
+                  <Text
+                    code
+                    className={styles.versionCost}
+                    fontSize={12}
+                    title={t('workingPanel.works.cumulativeCost', { cost })}
+                  >
+                    {cost}
+                  </Text>
+                )}
+                {time && (
+                  <Text className={styles.context} type={'secondary'}>
+                    {time}
+                  </Text>
+                )}
+              </Flexbox>
             </Flexbox>
             <Text ellipsis className={styles.context}>
               {version.title}

@@ -3,6 +3,7 @@ import { type ChatToolPayload } from '@lobechat/types';
 import { type Mock } from 'vitest';
 import { describe, expect, it, vi } from 'vitest';
 
+import { workService } from '@/services/work';
 import { type OperationCancelContext } from '@/store/chat/slices/operation/types';
 
 import { createAssistantMessage, createCallToolInstruction, createMockStore } from './fixtures';
@@ -26,6 +27,12 @@ vi.mock('@/utils/localStorage', () => {
 
   return { AsyncLocalStorage };
 });
+
+vi.mock('@/services/work', () => ({
+  workService: {
+    updateVersionCumulativeUsage: vi.fn().mockResolvedValue(undefined),
+  },
+}));
 
 describe('call_tool executor', () => {
   describe('Basic Behavior', () => {
@@ -66,6 +73,58 @@ describe('call_tool executor', () => {
       });
       expect(mockStore.optimisticCreateMessage).toHaveBeenCalledTimes(1);
       expect(mockStore.internal_invokeDifferentTypePlugin).toHaveBeenCalledTimes(1);
+    });
+
+    it('should backfill work version cumulative usage after tool usage is accumulated', async () => {
+      vi.mocked(workService.updateVersionCumulativeUsage).mockClear();
+
+      const mockStore = createMockStore();
+      const context = createTestContext({ operationId: 'root-op-1' });
+
+      const assistantMessage = createAssistantMessage({ groupId: 'group_123' });
+      mockStore.dbMessagesMap[context.messageKey] = [assistantMessage];
+
+      const toolCall: ChatToolPayload = {
+        apiName: 'search',
+        arguments: JSON.stringify({ query: 'test query' }),
+        id: 'tool_call_usage',
+        identifier: 'lobe-web-browsing',
+        type: 'default',
+      };
+
+      const instruction = createCallToolInstruction(toolCall, { parentMessageId: 'msg_parent' });
+      const state = createInitialState({
+        cost: {
+          calculatedAt: '2026-06-30T08:00:00.000Z',
+          currency: 'USD',
+          llm: { byModel: [], currency: 'USD', total: 0.01 },
+          tools: { byTool: [], currency: 'USD', total: 0 },
+          total: 0.01,
+        },
+        operationId: 'root-op-1',
+      });
+
+      await executeWithMockContext({
+        executor: 'call_tool',
+        instruction,
+        state,
+        mockStore,
+        context,
+      });
+
+      expect(workService.updateVersionCumulativeUsage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cumulativeCost: 0.011,
+          cumulativeUsage: expect.objectContaining({
+            cost: expect.objectContaining({ total: 0.011 }),
+            usage: expect.objectContaining({
+              tools: expect.objectContaining({ totalCalls: 1 }),
+            }),
+          }),
+          rootOperationId: 'root-op-1',
+          sourceToolCallId: 'tool_call_usage',
+        }),
+      );
     });
 
     it('should call internal_invokeDifferentTypePlugin with correct parameters', async () => {

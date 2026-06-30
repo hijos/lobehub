@@ -166,6 +166,68 @@ describe('WorkModel', () => {
     expect(byOperations['op-missing']).toEqual([]);
   });
 
+  it('updates cumulative usage for the version produced by a tool call', async () => {
+    const taskModel = new TaskModel(serverDB, userId);
+    const workModel = new WorkModel(serverDB, userId);
+    const firstTask = await taskModel.create({
+      instruction: 'First tool work',
+      name: 'First work',
+    });
+    const secondTask = await taskModel.create({
+      instruction: 'Second tool work',
+      name: 'Second work',
+    });
+
+    const firstWork = await workModel.registerTask({
+      role: 'created',
+      rootOperationId: 'op-cumulative',
+      source: 'createTask',
+      sourceToolCallId: 'tool-call-first',
+      taskId: firstTask.id,
+      topicId,
+    });
+    const secondWork = await workModel.registerTask({
+      role: 'created',
+      rootOperationId: 'op-cumulative',
+      source: 'createTask',
+      sourceToolCallId: 'tool-call-second',
+      taskId: secondTask.id,
+      topicId,
+    });
+
+    await workModel.updateVersionCumulativeUsage({
+      cumulativeCost: 0.03,
+      cumulativeUsage: {
+        capturedAt: '2026-06-30T08:00:00.000Z',
+        cost: { total: 0.03 },
+        usage: { llm: { tokens: { input: 1200, output: 300, total: 1500 } } },
+      },
+      rootOperationId: 'op-cumulative',
+      sourceToolCallId: 'tool-call-first',
+    });
+
+    const [firstVersion] = await serverDB
+      .select()
+      .from(workVersions)
+      .where(eq(workVersions.workId, firstWork!.id));
+    const [secondVersion] = await serverDB
+      .select()
+      .from(workVersions)
+      .where(eq(workVersions.workId, secondWork!.id));
+
+    expect(firstVersion.cumulativeCost).toBe(0.03);
+    expect(firstVersion.cumulativeUsage).toMatchObject({
+      capturedAt: '2026-06-30T08:00:00.000Z',
+      cost: { total: 0.03 },
+    });
+    expect(secondVersion.cumulativeCost).toBeNull();
+    expect(secondVersion.cumulativeUsage).toBeNull();
+
+    const byOperation = await workModel.listByRootOperation({ rootOperationId: 'op-cumulative' });
+    const firstOperationWork = byOperation.find((item) => item.id === firstWork!.id);
+    expect(firstOperationWork?.version.cumulativeCost).toBe(0.03);
+  });
+
   it('keeps one work row and appends versions for task edits', async () => {
     const taskModel = new TaskModel(serverDB, userId);
     const workModel = new WorkModel(serverDB, userId);

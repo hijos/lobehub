@@ -2696,6 +2696,8 @@ table work_versions {
   snapshot jsonb [not null]
   thumbnail text
   metadata jsonb
+  cumulative_cost "numeric(20, 6)"
+  cumulative_usage jsonb
   created_at "timestamp with time zone" [not null, default: `now()`]
 
   indexes {

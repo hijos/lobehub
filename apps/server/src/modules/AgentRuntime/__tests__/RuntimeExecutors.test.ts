@@ -135,6 +135,17 @@ vi.mock('@/server/services/file', () => ({
   })),
 }));
 
+const { mockAttachSourceMessage, mockUpdateVersionCumulativeUsage } = vi.hoisted(() => ({
+  mockAttachSourceMessage: vi.fn(),
+  mockUpdateVersionCumulativeUsage: vi.fn(),
+}));
+vi.mock('@/database/models/work', () => ({
+  WorkModel: vi.fn().mockImplementation(() => ({
+    attachSourceMessage: mockAttachSourceMessage,
+    updateVersionCumulativeUsage: mockUpdateVersionCumulativeUsage,
+  })),
+}));
+
 describe('RuntimeExecutors', { timeout: 60_000 }, () => {
   let mockMessageModel: any;
   let mockStreamManager: any;
@@ -143,6 +154,10 @@ describe('RuntimeExecutors', { timeout: 60_000 }, () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockAttachSourceMessage.mockReset();
+    mockAttachSourceMessage.mockResolvedValue(undefined);
+    mockUpdateVersionCumulativeUsage.mockReset();
+    mockUpdateVersionCumulativeUsage.mockResolvedValue(undefined);
     vi.mocked(initModelRuntimeFromDB).mockReset();
     mockCreateCompressionGroup.mockReset();
     mockFinalizeCompression.mockReset();
@@ -2935,6 +2950,58 @@ describe('RuntimeExecutors', { timeout: 60_000 }, () => {
       );
     });
 
+    it('backfills work version cumulative usage after tool usage is accumulated', async () => {
+      const executors = createRuntimeExecutors(ctx);
+      const state = createMockState({
+        cost: {
+          ...createMockCost(),
+          total: 0.02,
+        },
+        usage: {
+          ...createMockUsage(),
+          llm: {
+            ...createMockUsage().llm,
+            apiCalls: 1,
+            tokens: { input: 1000, output: 200, total: 1200 },
+          },
+        },
+      });
+
+      const instruction = {
+        payload: {
+          parentMessageId: 'assistant-msg-usage',
+          toolCalling: {
+            apiName: 'search',
+            arguments: '{"query": "test"}',
+            id: 'tool-call-usage',
+            identifier: 'lobe-web-browsing',
+            type: 'builtin' as const,
+          },
+        },
+        type: 'call_tool' as const,
+      };
+
+      await executors.call_tool!(instruction, state);
+
+      expect(mockUpdateVersionCumulativeUsage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cumulativeCost: 0.02,
+          cumulativeUsage: expect.objectContaining({
+            cost: expect.objectContaining({ total: 0.02 }),
+            usage: expect.objectContaining({
+              llm: expect.objectContaining({
+                apiCalls: 1,
+                tokens: { input: 1000, output: 200, total: 1200 },
+              }),
+              tools: expect.objectContaining({ totalCalls: 1 }),
+            }),
+          }),
+          rootOperationId: 'op-123',
+          sourceToolCallId: 'tool-call-usage',
+        }),
+      );
+    });
+
     it('should return tool message ID as parentMessageId in nextContext for parentId chain', async () => {
       // Setup: mock messageModel.create to return a specific tool message ID
       const toolMessageId = 'tool-msg-789';
@@ -3589,6 +3656,56 @@ describe('RuntimeExecutors', { timeout: 60_000 }, () => {
           tool_call_id: 'tool-call-2',
         }),
       );
+    });
+
+    it('backfills each batch tool work version with its own cumulative usage snapshot', async () => {
+      const executors = createRuntimeExecutors(ctx);
+      const state = createMockState();
+
+      const instruction = {
+        payload: {
+          parentMessageId: 'assistant-msg-123',
+          toolsCalling: [
+            {
+              apiName: 'search',
+              arguments: '{"query": "test1"}',
+              id: 'tool-call-1',
+              identifier: 'lobe-web-browsing',
+              type: 'default' as const,
+            },
+            {
+              apiName: 'crawl',
+              arguments: '{"url": "https://example.com"}',
+              id: 'tool-call-2',
+              identifier: 'lobe-web-browsing',
+              type: 'default' as const,
+            },
+          ],
+        },
+        type: 'call_tools_batch' as const,
+      };
+
+      await executors.call_tools_batch!(instruction, state);
+
+      expect(mockUpdateVersionCumulativeUsage).toHaveBeenCalledTimes(2);
+      expect(mockUpdateVersionCumulativeUsage.mock.calls.map(([params]) => params)).toEqual([
+        expect.objectContaining({
+          cumulativeUsage: expect.objectContaining({
+            usage: expect.objectContaining({
+              tools: expect.objectContaining({ totalCalls: 1 }),
+            }),
+          }),
+          sourceToolCallId: 'tool-call-1',
+        }),
+        expect.objectContaining({
+          cumulativeUsage: expect.objectContaining({
+            usage: expect.objectContaining({
+              tools: expect.objectContaining({ totalCalls: 2 }),
+            }),
+          }),
+          sourceToolCallId: 'tool-call-2',
+        }),
+      ]);
     });
 
     it('should apply retry policy per tool in batch mode', async () => {

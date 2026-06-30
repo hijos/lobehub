@@ -8,7 +8,7 @@ import type {
 } from '@lobechat/types';
 
 import { mutate } from '@/libs/swr';
-import { workKeys } from '@/libs/swr/keys';
+import { matchDomain, workKeys } from '@/libs/swr/keys';
 import { lambdaClient } from '@/libs/trpc/client';
 
 class WorkService {
@@ -37,6 +37,10 @@ class WorkService {
   refreshConversation = async (topicId?: string | null, threadId?: string | null) => {
     if (!topicId) return;
     await mutate(workKeys.conversation(topicId, threadId ?? null));
+  };
+
+  refreshAll = async () => {
+    await mutate(matchDomain('work:'));
   };
 
   refreshRootOperation = async (rootOperationId?: string | null) => {

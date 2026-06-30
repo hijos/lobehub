@@ -3,7 +3,16 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { getTestDB } from '../../core/getTestDB';
-import { messages, threads, topics, users, workContexts, works, workVersions } from '../../schemas';
+import {
+  messages,
+  tasks,
+  threads,
+  topics,
+  users,
+  workContexts,
+  works,
+  workVersions,
+} from '../../schemas';
 import type { LobeChatDatabase } from '../../type';
 import { TaskModel } from '../task';
 import { WorkModel } from '../work';
@@ -232,6 +241,80 @@ describe('WorkModel', () => {
     expect(work).toBeNull();
     const workRows = await serverDB.select().from(works);
     expect(workRows).toHaveLength(0);
+  });
+
+  it('deletes task work and cascades versions and contexts when the task is deleted', async () => {
+    const taskModel = new TaskModel(serverDB, userId);
+    const workModel = new WorkModel(serverDB, userId);
+    const task = await taskModel.create({ instruction: 'Delete task work', name: 'Delete me' });
+
+    const work = await workModel.registerTask({
+      role: 'created',
+      rootOperationId: 'op-delete-task',
+      source: 'createTask',
+      sourceToolCallId: 'tool-call-delete-task',
+      taskId: task.id,
+      threadId,
+      topicId,
+    });
+
+    await taskModel.delete(task.id);
+
+    const workRows = await serverDB.select().from(works).where(eq(works.id, work!.id));
+    const versionRows = await serverDB
+      .select()
+      .from(workVersions)
+      .where(eq(workVersions.workId, work!.id));
+    const contextRows = await serverDB
+      .select()
+      .from(workContexts)
+      .where(eq(workContexts.workId, work!.id));
+
+    expect(workRows).toHaveLength(0);
+    expect(versionRows).toHaveLength(0);
+    expect(contextRows).toHaveLength(0);
+    expect(await workModel.listByRootOperation({ rootOperationId: 'op-delete-task' })).toEqual([]);
+    expect(await workModel.listByConversation({ threadId, topicId })).toEqual([]);
+  });
+
+  it('clears task works for the current owner without touching another owner', async () => {
+    const taskModel = new TaskModel(serverDB, userId);
+    const otherTaskModel = new TaskModel(serverDB, userId2);
+    const workModel = new WorkModel(serverDB, userId);
+    const otherWorkModel = new WorkModel(serverDB, userId2);
+    const task = await taskModel.create({ instruction: 'Owner task' });
+    const otherTask = await otherTaskModel.create({ instruction: 'Other owner task' });
+
+    const work = await workModel.registerTask({
+      role: 'created',
+      source: 'createTask',
+      sourceToolCallId: 'tool-call-owner-clear',
+      taskId: task.id,
+    });
+    const otherWork = await otherWorkModel.registerTask({
+      role: 'created',
+      source: 'createTask',
+      sourceToolCallId: 'tool-call-other-clear',
+      taskId: otherTask.id,
+    });
+
+    await taskModel.deleteAll();
+
+    const deletedTasks = await serverDB.select().from(tasks).where(eq(tasks.id, task.id));
+    const remainingOtherTasks = await serverDB
+      .select()
+      .from(tasks)
+      .where(eq(tasks.id, otherTask.id));
+    const deletedWorkRows = await serverDB.select().from(works).where(eq(works.id, work!.id));
+    const remainingOtherWorkRows = await serverDB
+      .select()
+      .from(works)
+      .where(eq(works.id, otherWork!.id));
+
+    expect(deletedTasks).toHaveLength(0);
+    expect(remainingOtherTasks).toHaveLength(1);
+    expect(deletedWorkRows).toHaveLength(0);
+    expect(remainingOtherWorkRows).toHaveLength(1);
   });
 
   it('preserves work and versions when the topic context is deleted', async () => {

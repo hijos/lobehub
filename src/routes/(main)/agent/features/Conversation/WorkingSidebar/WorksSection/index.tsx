@@ -169,7 +169,7 @@ const VersionList = memo<{ workId: string }>(({ workId }) => {
 VersionList.displayName = 'VersionList';
 
 const WorkCard = memo<{ work: TaskWorkListItem }>(({ work }) => {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const navigateToTask = useNavigateToTaskDetail();
   const status = toTaskStatus(work.task.status);
   const taskIdentifier = work.resourceIdentifier ?? work.resourceId;

@@ -95,6 +95,7 @@ const AssistantMessage = memo<AssistantMessageProps>(
       <ChatItem
         showTitle
         aboveMessage={null}
+        afterActions={<MessageWorks rootOperationId={metadata?.work?.rootOperationId} />}
         avatar={avatar}
         belowMessage={hasEmptyErrorMessage ? footerRender : undefined}
         customErrorRender={(error) => <ErrorMessageExtra data={item} error={error} />}
@@ -134,7 +135,6 @@ const AssistantMessage = memo<AssistantMessageProps>(
               usage={usage! || metadata}
             />
             {footerRender}
-            <MessageWorks rootOperationId={metadata?.work?.rootOperationId} />
           </>
         }
         onDoubleClick={onDoubleClick}

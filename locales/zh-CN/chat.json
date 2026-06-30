@@ -1398,6 +1398,8 @@
   "workingPanel.works.role.used_as_context": "已作为上下文",
   "workingPanel.works.title": "产物",
   "workingPanel.works.versionError": "版本加载失败",
+  "workingPanel.works.viewMode.history": "版本历史",
+  "workingPanel.works.viewMode.summary": "摘要卡片",
   "you": "你",
   "zenMode": "专注模式"
 }

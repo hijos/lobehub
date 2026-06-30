@@ -177,12 +177,24 @@ export const workKeys = {
     topicId,
     threadId ?? null,
   ]),
+  conversationSummaries: def(
+    'work:conversationSummaries',
+    (topicId: string, threadId?: string | null) => [
+      'work:conversationSummaries',
+      topicId,
+      threadId ?? null,
+    ],
+  ),
   rootOperation: def('work:rootOperation', (rootOperationId: string) => [
     'work:rootOperation',
     rootOperationId,
   ]),
   rootOperations: def('work:rootOperations', (rootOperationIds: string[]) => [
     'work:rootOperations',
+    rootOperationIds,
+  ]),
+  rootOperationSummaries: def('work:rootOperationSummaries', (rootOperationIds: string[]) => [
+    'work:rootOperationSummaries',
     rootOperationIds,
   ]),
   versions: def('work:versions', (workId: string) => ['work:versions', workId]),

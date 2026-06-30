@@ -107,6 +107,7 @@ export interface WorkContextItem {
 
 export interface TaskWorkListItem extends WorkItem {
   task: {
+    description: string | null;
     priority: number | null;
     status: TaskStatus | string | null;
   };
@@ -128,6 +129,24 @@ export interface TaskWorkContextVersionItem extends TaskWorkListItem {
 }
 
 export type TaskWorkContextVersionMap = Record<string, TaskWorkContextVersionItem[]>;
+
+export interface TaskWorkSummaryItem extends TaskWorkListItem {
+  context: Pick<
+    WorkContextItem,
+    | 'createdAt'
+    | 'id'
+    | 'role'
+    | 'rootOperationId'
+    | 'source'
+    | 'sourceMessageId'
+    | 'sourceToolCallId'
+    | 'sourceType'
+  >;
+  totalCost: number | null;
+  version: Pick<WorkVersionItem, 'createdAt' | 'id' | 'title' | 'version'> | null;
+}
+
+export type TaskWorkSummaryMap = Record<string, TaskWorkSummaryItem[]>;
 
 export interface WorkVersionListItem extends WorkVersionItem {
   context?: Pick<WorkContextItem, 'createdAt' | 'id' | 'role' | 'source' | 'sourceType'> | null;

@@ -1372,6 +1372,8 @@ export default {
   'workingPanel.works.role.used_as_context': 'Used as context',
   'workingPanel.works.title': 'Works',
   'workingPanel.works.versionError': 'Failed to load versions',
+  'workingPanel.works.viewMode.history': 'Version history',
+  'workingPanel.works.viewMode.summary': 'Summary cards',
   'workingPanel.localFile.binary': 'Binary file — preview unavailable',
   'workingPanel.localFile.close': 'Close',
   'workingPanel.localFile.closeLeft': 'Close to the Left',

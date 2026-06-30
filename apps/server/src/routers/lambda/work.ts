@@ -94,6 +94,30 @@ export const workRouter = router({
       }),
     ),
 
+  listSummariesByConversation: workProcedure
+    .input(
+      z.object({
+        limit: z.number().min(1).max(100).default(50),
+        threadId: z.string().nullable().optional(),
+        topicId: z.string().nullable().optional(),
+      }),
+    )
+    .query(async ({ ctx, input }) => ctx.workModel.listSummariesByConversation(input)),
+
+  listSummariesByRootOperations: workProcedure
+    .input(
+      z.object({
+        limit: z.number().min(1).max(50).default(20),
+        rootOperationIds: z.array(z.string()).nullable().optional(),
+      }),
+    )
+    .query(async ({ ctx, input }) =>
+      ctx.workModel.listSummariesByRootOperations({
+        limit: input.limit,
+        rootOperationIds: input.rootOperationIds,
+      }),
+    ),
+
   listVersions: workProcedure
     .input(z.object({ workId: z.string().min(1) }))
     .query(async ({ ctx, input }) => ctx.workModel.listVersions(input.workId)),

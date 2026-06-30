@@ -3,6 +3,8 @@ import type {
   TaskWorkContextVersionItem,
   TaskWorkContextVersionMap,
   TaskWorkListItem,
+  TaskWorkSummaryItem,
+  TaskWorkSummaryMap,
   UpdateWorkVersionCumulativeUsageParams,
   WorkItem,
   WorkVersionListItem,
@@ -29,6 +31,17 @@ class WorkService {
     rootOperationIds?: string[] | null;
   }): Promise<TaskWorkContextVersionMap> => lambdaClient.work.listByRootOperations.query(params);
 
+  listSummariesByConversation = async (params: {
+    limit?: number;
+    threadId?: string | null;
+    topicId?: string | null;
+  }): Promise<TaskWorkSummaryItem[]> => lambdaClient.work.listSummariesByConversation.query(params);
+
+  listSummariesByRootOperations = async (params: {
+    limit?: number;
+    rootOperationIds?: string[] | null;
+  }): Promise<TaskWorkSummaryMap> => lambdaClient.work.listSummariesByRootOperations.query(params);
+
   listVersions = async (workId: string): Promise<WorkVersionListItem[]> =>
     lambdaClient.work.listVersions.query({ workId });
 
@@ -37,11 +50,17 @@ class WorkService {
 
   updateVersionCumulativeUsage = async (
     params: UpdateWorkVersionCumulativeUsageParams,
-  ): Promise<void> => lambdaClient.work.updateVersionCumulativeUsage.mutate(params);
+  ): Promise<void> => {
+    await lambdaClient.work.updateVersionCumulativeUsage.mutate(params);
+    await this.refreshRootOperation(params.rootOperationId);
+  };
 
   refreshConversation = async (topicId?: string | null, threadId?: string | null) => {
     if (!topicId) return;
-    await mutate(workKeys.conversation(topicId, threadId ?? null));
+    await Promise.all([
+      mutate(workKeys.conversation(topicId, threadId ?? null)),
+      mutate(workKeys.conversationSummaries(topicId, threadId ?? null)),
+    ]);
   };
 
   refreshAll = async () => {
@@ -61,6 +80,8 @@ class WorkService {
 
     await Promise.all([
       mutate(workKeys.rootOperations(ids)),
+      mutate(workKeys.rootOperationSummaries(ids)),
+      mutate(matchDomain(workKeys.rootOperationSummaries.root)),
       ...ids.map((id) => mutate(workKeys.rootOperation(id))),
     ]);
   };

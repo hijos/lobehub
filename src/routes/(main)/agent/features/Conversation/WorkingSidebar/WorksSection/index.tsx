@@ -1,7 +1,18 @@
-import type { TaskStatus, TaskWorkListItem, WorkVersionListItem } from '@lobechat/types';
-import { Center, Empty, Flexbox, Text } from '@lobehub/ui';
+import type {
+  TaskStatus,
+  TaskWorkListItem,
+  TaskWorkSummaryItem,
+  WorkVersionListItem,
+} from '@lobechat/types';
+import { ActionIcon, Center, Empty, Flexbox, Text } from '@lobehub/ui';
 import { createStaticStyles } from 'antd-style';
-import { ChevronDownIcon, ChevronRightIcon, ClipboardListIcon } from 'lucide-react';
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  ClipboardListIcon,
+  HistoryIcon,
+  ListIcon,
+} from 'lucide-react';
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -9,12 +20,17 @@ import NeuralNetworkLoading from '@/components/NeuralNetworkLoading';
 import { formatTaskItemDate } from '@/features/AgentTasks/features/formatTaskItemDate';
 import TaskPriorityTag from '@/features/AgentTasks/features/TaskPriorityTag';
 import TaskStatusTag from '@/features/AgentTasks/features/TaskStatusTag';
-import { useNavigateToTaskDetail } from '@/features/AgentTasks/shared/taskDetailPath';
+import WorkSummaryCard from '@/features/AgentTasks/features/WorkSummaryCard';
+import { useLocalStorageState } from '@/hooks/useLocalStorageState';
 import { useClientDataSWR } from '@/libs/swr';
 import { workKeys } from '@/libs/swr/keys';
 import { workService } from '@/services/work';
 import { useChatStore } from '@/store/chat';
-import { formatWorkVersionCost, getWorkVersionCostRefreshInterval } from '@/utils/workVersionCost';
+import {
+  formatWorkVersionCost,
+  getWorkSummaryCostRefreshInterval,
+  getWorkVersionCostRefreshInterval,
+} from '@/utils/workVersionCost';
 
 const TASK_STATUS_SET = new Set<TaskStatus>([
   'backlog',
@@ -28,6 +44,10 @@ const TASK_STATUS_SET = new Set<TaskStatus>([
 
 const toTaskStatus = (status?: string | null): TaskStatus =>
   status && TASK_STATUS_SET.has(status as TaskStatus) ? (status as TaskStatus) : 'backlog';
+
+type WorksViewMode = 'history' | 'summary';
+
+const WORKS_VIEW_MODE_STORAGE_KEY = 'lobechat-working-panel-works-view-mode';
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
   container: css`
@@ -53,10 +73,17 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
       background: ${cssVar.colorFillQuaternary};
     }
   `,
+  modeToolbar: css`
+    flex-shrink: 0;
+    align-self: flex-end;
+  `,
   title: css`
     min-width: 0;
     font-size: 14px;
     font-weight: 500;
+  `,
+  versionCost: css`
+    color: ${cssVar.colorTextTertiary};
   `,
   versionList: css`
     margin-inline-start: 34px;
@@ -70,14 +97,11 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
   versionTitle: css`
     color: ${cssVar.colorTextSecondary};
   `,
-  versionCost: css`
-    color: ${cssVar.colorTextTertiary};
-  `,
   workCard: css`
     overflow: hidden;
     border: 1px solid ${cssVar.colorBorderSecondary};
     border-radius: 8px;
-    background: ${cssVar.colorBgElevated};
+    background: ${cssVar.colorFillQuaternary};
   `,
 }));
 
@@ -168,9 +192,9 @@ const VersionList = memo<{ workId: string }>(({ workId }) => {
 
 VersionList.displayName = 'VersionList';
 
-const WorkCard = memo<{ work: TaskWorkListItem }>(({ work }) => {
-  const [expanded, setExpanded] = useState(false);
-  const navigateToTask = useNavigateToTaskDetail();
+const WorkVersionHistoryCard = memo<{ work: TaskWorkListItem }>(({ work }) => {
+  const [expanded, setExpanded] = useState(true);
+  const openTaskDetail = useChatStore((s) => s.openTaskDetail);
   const status = toTaskStatus(work.task.status);
   const taskIdentifier = work.resourceIdentifier ?? work.resourceId;
   const ToggleIcon = expanded ? ChevronDownIcon : ChevronRightIcon;
@@ -195,7 +219,7 @@ const WorkCard = memo<{ work: TaskWorkListItem }>(({ work }) => {
           className={styles.title}
           onClick={(event) => {
             event.stopPropagation();
-            navigateToTask(taskIdentifier);
+            openTaskDetail(taskIdentifier);
           }}
         >
           {work.title}
@@ -206,18 +230,65 @@ const WorkCard = memo<{ work: TaskWorkListItem }>(({ work }) => {
   );
 });
 
-WorkCard.displayName = 'WorkCard';
+WorkVersionHistoryCard.displayName = 'WorkVersionHistoryCard';
+
+const WorksModeToolbar = memo<{
+  mode: WorksViewMode;
+  setMode: (mode: WorksViewMode) => void;
+}>(({ mode, setMode }) => {
+  const { t } = useTranslation('chat');
+
+  return (
+    <Flexbox horizontal className={styles.modeToolbar} gap={4}>
+      <ActionIcon
+        active={mode === 'summary'}
+        icon={ListIcon}
+        size={'small'}
+        title={t('workingPanel.works.viewMode.summary')}
+        onClick={() => setMode('summary')}
+      />
+      <ActionIcon
+        active={mode === 'history'}
+        icon={HistoryIcon}
+        size={'small'}
+        title={t('workingPanel.works.viewMode.history')}
+        onClick={() => setMode('history')}
+      />
+    </Flexbox>
+  );
+});
+
+WorksModeToolbar.displayName = 'WorksModeToolbar';
 
 const WorksSection = memo(() => {
   const { t } = useTranslation('chat');
+  const [mode, setMode] = useLocalStorageState<WorksViewMode>(
+    WORKS_VIEW_MODE_STORAGE_KEY,
+    'summary',
+  );
   const topicId = useChatStore((s) => s.activeTopicId);
   const threadId = useChatStore((s) => s.activeThreadId);
   const {
-    data = [],
-    error,
-    isLoading,
+    data: summaryData = [],
+    error: summaryError,
+    isLoading: isSummaryLoading,
+  } = useClientDataSWR<TaskWorkSummaryItem[]>(
+    mode === 'summary' && topicId
+      ? workKeys.conversationSummaries(topicId, threadId ?? null)
+      : null,
+    () => workService.listSummariesByConversation({ threadId, topicId }),
+    {
+      fallbackData: [],
+      refreshInterval: getWorkSummaryCostRefreshInterval,
+      revalidateOnFocus: false,
+    },
+  );
+  const {
+    data: historyData = [],
+    error: historyError,
+    isLoading: isHistoryLoading,
   } = useClientDataSWR<TaskWorkListItem[]>(
-    topicId ? workKeys.conversation(topicId, threadId ?? null) : null,
+    mode === 'history' && topicId ? workKeys.conversation(topicId, threadId ?? null) : null,
     () => workService.listByConversation({ threadId, topicId }),
     {
       fallbackData: [],
@@ -225,35 +296,46 @@ const WorksSection = memo(() => {
     },
   );
 
-  if (isLoading) {
-    return (
-      <Center height={'100%'}>
-        <NeuralNetworkLoading size={24} />
-      </Center>
-    );
-  }
+  const isLoading = mode === 'summary' ? isSummaryLoading : isHistoryLoading;
+  const error = mode === 'summary' ? summaryError : historyError;
+  const data = mode === 'summary' ? summaryData : historyData;
 
-  if (error) {
-    return (
-      <Center height={'100%'}>
-        <Empty description={t('workingPanel.works.error')} icon={ClipboardListIcon} />
-      </Center>
-    );
-  }
+  const content = (() => {
+    if (isLoading) {
+      return (
+        <Center flex={1}>
+          <NeuralNetworkLoading size={24} />
+        </Center>
+      );
+    }
 
-  if (data.length === 0) {
-    return (
-      <Center height={'100%'}>
-        <Empty description={t('workingPanel.works.empty')} icon={ClipboardListIcon} />
-      </Center>
-    );
-  }
+    if (error) {
+      return (
+        <Center flex={1}>
+          <Empty description={t('workingPanel.works.error')} icon={ClipboardListIcon} />
+        </Center>
+      );
+    }
+
+    if (data.length === 0) {
+      return (
+        <Center flex={1}>
+          <Empty description={t('workingPanel.works.empty')} icon={ClipboardListIcon} />
+        </Center>
+      );
+    }
+
+    return mode === 'summary'
+      ? summaryData.map((work) => (
+          <WorkSummaryCard className={styles.workCard} item={work} key={work.id} />
+        ))
+      : historyData.map((work) => <WorkVersionHistoryCard key={work.id} work={work} />);
+  })();
 
   return (
     <Flexbox className={styles.container} flex={1} gap={12}>
-      {data.map((work) => (
-        <WorkCard key={work.id} work={work} />
-      ))}
+      <WorksModeToolbar mode={mode} setMode={setMode} />
+      {content}
     </Flexbox>
   );
 });

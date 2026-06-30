@@ -4,6 +4,8 @@ import type {
   TaskWorkContextVersionItem,
   TaskWorkContextVersionMap,
   TaskWorkListItem,
+  TaskWorkSummaryItem,
+  TaskWorkSummaryMap,
   TaskWorkVersionSnapshot,
   UpdateWorkVersionCumulativeUsageParams,
   WorkItem,
@@ -21,6 +23,15 @@ import { buildWorkspaceWhere } from '../utils/workspace';
 
 const MAX_VERSION_CREATE_RETRIES = 5;
 const VERSION_CONTEXT_ROLES = ['created', 'updated'] as const;
+
+interface TaskWorkSummaryQueryRow {
+  context: typeof workContexts.$inferSelect;
+  taskDescription: TaskWorkListItem['task']['description'];
+  taskPriority: TaskWorkListItem['task']['priority'];
+  taskStatus: TaskWorkListItem['task']['status'];
+  version: TaskWorkSummaryItem['version'];
+  work: WorkItem;
+}
 
 const isUniqueViolation = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
@@ -343,6 +354,7 @@ export class WorkModel {
     const rows = await this.db
       .select({
         context: workContexts,
+        taskDescription: sql<string | null>`${workVersions.snapshot}->'task'->>'description'`,
         taskPriority: tasks.priority,
         taskStatus: tasks.status,
         version: {
@@ -385,6 +397,7 @@ export class WorkModel {
         sourceType: row.context.sourceType,
       },
       task: {
+        description: row.taskDescription,
         priority: row.taskPriority,
         status: row.taskStatus,
       },
@@ -435,6 +448,155 @@ export class WorkModel {
     return result;
   };
 
+  private toTaskWorkContext = (context: typeof workContexts.$inferSelect) => ({
+    createdAt: context.createdAt,
+    id: context.id,
+    role: context.role,
+    rootOperationId: context.rootOperationId,
+    source: context.source,
+    sourceMessageId: context.sourceMessageId,
+    sourceToolCallId: context.sourceToolCallId,
+    sourceType: context.sourceType,
+  });
+
+  private getTotalCostByWorkIds = async (workIds: string[]) => {
+    const ids = Array.from(new Set(workIds));
+    const result = new Map<string, number | null>();
+    if (ids.length === 0) return result;
+
+    const rows = await this.db
+      .select({
+        costCount: sql<number>`COUNT(${workVersions.cumulativeCost})`.mapWith(Number),
+        totalCost: sql<number>`COALESCE(SUM(${workVersions.cumulativeCost}), 0)`.mapWith(Number),
+        workId: workVersions.workId,
+      })
+      .from(workVersions)
+      .where(inArray(workVersions.workId, ids))
+      .groupBy(workVersions.workId);
+
+    for (const row of rows) {
+      result.set(row.workId, row.costCount > 0 ? row.totalCost : null);
+    }
+
+    return result;
+  };
+
+  private listTaskWorkSummaryRows = async (
+    filters: SQL[],
+    rowLimit: number,
+  ): Promise<TaskWorkSummaryQueryRow[]> =>
+    this.db
+      .select({
+        context: workContexts,
+        taskDescription: sql<string | null>`${workVersions.snapshot}->'task'->>'description'`,
+        taskPriority: tasks.priority,
+        taskStatus: tasks.status,
+        version: {
+          createdAt: workVersions.createdAt,
+          id: workVersions.id,
+          title: workVersions.title,
+          version: workVersions.version,
+        },
+        work: works,
+      })
+      .from(workContexts)
+      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
+      .innerJoin(workVersions, eq(works.currentVersionId, workVersions.id))
+      .innerJoin(
+        tasks,
+        and(eq(works.resourceType, 'task'), eq(works.resourceId, tasks.id), this.taskOwnership()),
+      )
+      .where(
+        and(
+          this.contextOwnership(),
+          ...filters,
+          inArray(workContexts.role, VERSION_CONTEXT_ROLES),
+          eq(works.type, 'task'),
+        ),
+      )
+      .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
+      .limit(rowLimit);
+
+  private toTaskWorkSummaries = async (
+    rows: TaskWorkSummaryQueryRow[],
+  ): Promise<TaskWorkSummaryItem[]> => {
+    const costByWorkId = await this.getTotalCostByWorkIds(rows.map((row) => row.work.id));
+
+    return rows.map((row) => ({
+      ...row.work,
+      context: this.toTaskWorkContext(row.context),
+      task: {
+        description: row.taskDescription,
+        priority: row.taskPriority,
+        status: row.taskStatus,
+      },
+      totalCost: costByWorkId.get(row.work.id) ?? null,
+      version: row.version,
+    }));
+  };
+
+  private latestSummaryRowsByWork = (rows: TaskWorkSummaryQueryRow[], limit?: number) => {
+    const seen = new Set<string>();
+    const latestRows: TaskWorkSummaryQueryRow[] = [];
+
+    for (const row of rows) {
+      if (seen.has(row.work.id)) continue;
+      seen.add(row.work.id);
+      latestRows.push(row);
+      if (limit && latestRows.length >= limit) break;
+    }
+
+    return latestRows;
+  };
+
+  listSummariesByRootOperations = async (params: {
+    limit?: number;
+    rootOperationIds?: string[] | null;
+  }): Promise<TaskWorkSummaryMap> => {
+    const rootOperationIds = Array.from(
+      new Set((params.rootOperationIds ?? []).filter((id): id is string => !!id)),
+    ).sort();
+    const result: TaskWorkSummaryMap = Object.fromEntries(
+      rootOperationIds.map((rootOperationId) => [rootOperationId, []]),
+    );
+    if (rootOperationIds.length === 0) return result;
+
+    const limit = params.limit ?? 20;
+    const rows = await this.listTaskWorkSummaryRows(
+      [inArray(workContexts.rootOperationId, rootOperationIds)],
+      rootOperationIds.length * limit * 4,
+    );
+    const summaries = await this.toTaskWorkSummaries(this.latestSummaryRowsByWork(rows));
+
+    for (const summary of summaries) {
+      const rootOperationId = summary.context.rootOperationId;
+      if (!rootOperationId || !(rootOperationId in result)) continue;
+      if (result[rootOperationId].length >= limit) continue;
+      result[rootOperationId].push(summary);
+    }
+
+    return result;
+  };
+
+  listSummariesByConversation = async (params: {
+    limit?: number;
+    threadId?: string | null;
+    topicId?: string | null;
+  }): Promise<TaskWorkSummaryItem[]> => {
+    if (!params.topicId) return [];
+
+    const limit = params.limit ?? 50;
+    const threadFilter = params.threadId
+      ? eq(workContexts.threadId, params.threadId)
+      : isNull(workContexts.threadId);
+    const rows = await this.listTaskWorkSummaryRows(
+      [eq(workContexts.topicId, params.topicId), threadFilter],
+      limit * 4,
+    );
+
+    return this.toTaskWorkSummaries(this.latestSummaryRowsByWork(rows, limit));
+  };
+
   listByConversation = async (params: {
     limit?: number;
     threadId?: string | null;
@@ -450,6 +612,7 @@ export class WorkModel {
     const rows = await this.db
       .select({
         contextCreatedAt: workContexts.createdAt,
+        taskDescription: tasks.description,
         taskPriority: tasks.priority,
         taskStatus: tasks.status,
         work: works,
@@ -480,6 +643,7 @@ export class WorkModel {
       items.push({
         ...row.work,
         task: {
+          description: row.taskDescription,
           priority: row.taskPriority,
           status: row.taskStatus,
         },

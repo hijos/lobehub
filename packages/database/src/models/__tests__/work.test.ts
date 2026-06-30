@@ -287,6 +287,88 @@ describe('WorkModel', () => {
     expect(updatedContext.sourceMessageId).toBe('msg-tool-edit');
   });
 
+  it('summarizes a task work on its latest operation with total version cost', async () => {
+    const taskModel = new TaskModel(serverDB, userId);
+    const workModel = new WorkModel(serverDB, userId);
+    const task = await taskModel.create({
+      description: 'Original description',
+      instruction: 'Original',
+      name: 'Original title',
+    });
+
+    const first = await workModel.registerTask({
+      role: 'created',
+      rootOperationId: 'op-summary-create',
+      source: 'createTask',
+      sourceToolCallId: 'tool-call-summary-create',
+      taskId: task.id,
+      topicId,
+    });
+
+    await taskModel.update(task.id, {
+      description: 'Updated description',
+      instruction: 'Updated instruction',
+      name: 'Updated title',
+    });
+
+    await workModel.registerTask({
+      role: 'updated',
+      rootOperationId: 'op-summary-edit',
+      source: 'editTask',
+      sourceToolCallId: 'tool-call-summary-edit',
+      taskIdentifier: task.identifier,
+      topicId,
+    });
+    await taskModel.update(task.id, { description: 'Live task description after snapshot' });
+
+    const pendingByOperation = await workModel.listSummariesByRootOperations({
+      rootOperationIds: ['op-summary-create', 'op-summary-edit'],
+    });
+    expect(pendingByOperation['op-summary-create']).toEqual([]);
+    expect(pendingByOperation['op-summary-edit']).toHaveLength(1);
+    expect(pendingByOperation['op-summary-edit']?.[0]).toMatchObject({
+      context: expect.objectContaining({ role: 'updated', rootOperationId: 'op-summary-edit' }),
+      id: first?.id,
+      title: 'Updated title',
+      totalCost: null,
+      version: expect.objectContaining({ title: 'Updated title', version: 2 }),
+    });
+    expect(pendingByOperation['op-summary-edit']?.[0].task.description).toBe('Updated description');
+
+    await workModel.updateVersionCumulativeUsage({
+      cumulativeCost: 0.000_295,
+      rootOperationId: 'op-summary-create',
+      sourceToolCallId: 'tool-call-summary-create',
+    });
+
+    const partialCostByOperation = await workModel.listSummariesByRootOperations({
+      rootOperationIds: ['op-summary-create', 'op-summary-edit'],
+    });
+    expect(partialCostByOperation['op-summary-edit']?.[0].totalCost).toBeCloseTo(0.000_295, 6);
+
+    await workModel.updateVersionCumulativeUsage({
+      cumulativeCost: 0.000_692,
+      rootOperationId: 'op-summary-edit',
+      sourceToolCallId: 'tool-call-summary-edit',
+    });
+
+    const byOperation = await workModel.listSummariesByRootOperations({
+      rootOperationIds: ['op-summary-create', 'op-summary-edit'],
+    });
+    expect(byOperation['op-summary-create']).toEqual([]);
+    expect(byOperation['op-summary-edit']).toHaveLength(1);
+    expect(byOperation['op-summary-edit']?.[0].totalCost).toBeCloseTo(0.000_987, 6);
+
+    const byConversation = await workModel.listSummariesByConversation({ topicId });
+    expect(byConversation).toHaveLength(1);
+    expect(byConversation[0]).toMatchObject({
+      context: expect.objectContaining({ role: 'updated', rootOperationId: 'op-summary-edit' }),
+      id: first?.id,
+      version: expect.objectContaining({ title: 'Updated title', version: 2 }),
+    });
+    expect(byConversation[0].totalCost).toBeCloseTo(0.000_987, 6);
+  });
+
   it('does not let another user register someone else task', async () => {
     const taskModel = new TaskModel(serverDB, userId);
     const otherWorkModel = new WorkModel(serverDB, userId2);
@@ -303,6 +385,32 @@ describe('WorkModel', () => {
     expect(work).toBeNull();
     const workRows = await serverDB.select().from(works);
     expect(workRows).toHaveLength(0);
+  });
+
+  it('does not expose another user task work summaries', async () => {
+    const otherTopicId = 'work-test-other-topic-id';
+    await serverDB.insert(topics).values({ id: otherTopicId, userId: userId2 });
+    const otherTaskModel = new TaskModel(serverDB, userId2);
+    const otherWorkModel = new WorkModel(serverDB, userId2);
+    const workModel = new WorkModel(serverDB, userId);
+    const otherTask = await otherTaskModel.create({
+      instruction: 'Other user summary',
+      name: 'Private summary',
+    });
+
+    await otherWorkModel.registerTask({
+      role: 'created',
+      rootOperationId: 'op-other-summary',
+      source: 'createTask',
+      sourceToolCallId: 'tool-call-other-summary',
+      taskId: otherTask.id,
+      topicId: otherTopicId,
+    });
+
+    expect(await workModel.listSummariesByConversation({ topicId: otherTopicId })).toEqual([]);
+    expect(
+      await workModel.listSummariesByRootOperations({ rootOperationIds: ['op-other-summary'] }),
+    ).toEqual({ 'op-other-summary': [] });
   });
 
   it('deletes task work and cascades versions and contexts when the task is deleted', async () => {

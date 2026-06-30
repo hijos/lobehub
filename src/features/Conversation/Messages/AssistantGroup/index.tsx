@@ -205,6 +205,7 @@ const GroupMessage = memo<GroupMessageProps>(
     return (
       <ChatItem
         showTitle
+        afterActions={<MessageWorks rootOperationId={workRootOperationId} />}
         avatar={isSupervisor ? { ...avatar, title: groupMeta.title } : avatar}
         id={id}
         placement={'left'}
@@ -285,7 +286,6 @@ const GroupMessage = memo<GroupMessageProps>(
           <Usage model={model} performance={performance} provider={provider!} usage={usage} />
         )}
         {footerRender}
-        <MessageWorks rootOperationId={workRootOperationId} />
         {reactions.length > 0 && (
           <ReactionDisplay
             isActive={isReactionActive}

@@ -1,4 +1,12 @@
 // @vitest-environment node
+import type {
+  DocumentWorkSummaryItem,
+  DocumentWorkVersionSnapshot,
+  TaskWorkSummaryItem,
+  TaskWorkVersionSnapshot,
+  WorkSummaryItem,
+  WorkVersionSnapshot,
+} from '@lobechat/types';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -27,6 +35,46 @@ const topicId = 'work-test-topic-id';
 const threadId = 'work-test-thread-id';
 const agentId = 'work-test-agent-id';
 const agentId2 = 'work-test-agent-id-2';
+
+const expectTaskSnapshot = (snapshot: WorkVersionSnapshot): TaskWorkVersionSnapshot => {
+  expect(snapshot).toHaveProperty('task');
+
+  if (!('task' in snapshot)) {
+    throw new Error('Expected task work snapshot');
+  }
+
+  return snapshot.task;
+};
+
+const expectDocumentSnapshot = (snapshot: WorkVersionSnapshot): DocumentWorkVersionSnapshot => {
+  expect(snapshot).toHaveProperty('document');
+
+  if (!('document' in snapshot)) {
+    throw new Error('Expected document work snapshot');
+  }
+
+  return snapshot.document;
+};
+
+const expectTaskSummaryItem = (item?: WorkSummaryItem): TaskWorkSummaryItem => {
+  expect(item).toBeDefined();
+
+  if (!item || item.type !== 'task') {
+    throw new Error('Expected task work summary');
+  }
+
+  return item;
+};
+
+const expectDocumentSummaryItem = (item?: WorkSummaryItem): DocumentWorkSummaryItem => {
+  expect(item).toBeDefined();
+
+  if (!item || item.type !== 'document') {
+    throw new Error('Expected document work summary');
+  }
+
+  return item;
+};
 
 beforeEach(async () => {
   await serverDB.delete(users);
@@ -99,7 +147,7 @@ describe('WorkModel', () => {
       title: 'Work MVP plan',
       version: 1,
     });
-    expect(versions[0].snapshot.task.identifier).toBe(task.identifier);
+    expect(expectTaskSnapshot(versions[0].snapshot).identifier).toBe(task.identifier);
 
     const worksInConversation = await workModel.listByConversation({ threadId, topicId });
     expect(worksInConversation).toHaveLength(1);
@@ -286,7 +334,7 @@ describe('WorkModel', () => {
     expect(versions.map((item) => item.version)).toEqual([2, 1]);
     expect(versions[0].context?.role).toBe('updated');
     expect(versions[0].context?.id).toBeTruthy();
-    expect(versions[0].snapshot.task.instruction).toBe('Updated instruction');
+    expect(expectTaskSnapshot(versions[0].snapshot).instruction).toBe('Updated instruction');
 
     const [updatedContext] = await serverDB
       .select()
@@ -334,14 +382,15 @@ describe('WorkModel', () => {
     });
     expect(pendingByOperation['op-summary-create']).toEqual([]);
     expect(pendingByOperation['op-summary-edit']).toHaveLength(1);
-    expect(pendingByOperation['op-summary-edit']?.[0]).toMatchObject({
+    const pendingSummary = expectTaskSummaryItem(pendingByOperation['op-summary-edit']?.[0]);
+    expect(pendingSummary).toMatchObject({
       context: expect.objectContaining({ role: 'updated', rootOperationId: 'op-summary-edit' }),
       id: first?.id,
       title: 'Updated title',
       totalCost: null,
       version: expect.objectContaining({ title: 'Updated title', version: 2 }),
     });
-    expect(pendingByOperation['op-summary-edit']?.[0].task.description).toBe('Updated description');
+    expect(pendingSummary.task.description).toBe('Updated description');
 
     await workModel.updateVersionCumulativeUsage({
       cumulativeCost: 0.000_295,
@@ -476,7 +525,7 @@ describe('WorkModel', () => {
     });
 
     const versions = await workModel.listVersions(work!.id);
-    expect(versions[0].snapshot.document.description).toBe(expectedDescription);
+    expect(expectDocumentSnapshot(versions[0].snapshot).description).toBe(expectedDescription);
 
     const byOperation = await workModel.listByRootOperation({
       rootOperationId: 'op-doc-empty-description',
@@ -488,9 +537,8 @@ describe('WorkModel', () => {
     const summaries = await workModel.listSummariesByRootOperations({
       rootOperationIds: ['op-doc-empty-description'],
     });
-    expect(summaries['op-doc-empty-description']?.[0].document.description).toBe(
-      expectedDescription,
-    );
+    const documentSummary = expectDocumentSummaryItem(summaries['op-doc-empty-description']?.[0]);
+    expect(documentSummary.document.description).toBe(expectedDescription);
 
     const byConversation = await workModel.listByConversation({ topicId });
     expect(byConversation[0]).toMatchObject({

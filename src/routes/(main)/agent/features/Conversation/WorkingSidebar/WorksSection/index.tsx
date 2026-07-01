@@ -1,7 +1,8 @@
 import type {
   TaskStatus,
   TaskWorkListItem,
-  TaskWorkSummaryItem,
+  WorkListItem,
+  WorkSummaryItem,
   WorkVersionListItem,
 } from '@lobechat/types';
 import { ActionIcon, Center, Empty, Flexbox, Text } from '@lobehub/ui';
@@ -10,6 +11,7 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   ClipboardListIcon,
+  FileTextIcon,
   HistoryIcon,
   ListIcon,
 } from 'lucide-react';
@@ -192,7 +194,7 @@ const VersionList = memo<{ workId: string }>(({ workId }) => {
 
 VersionList.displayName = 'VersionList';
 
-const WorkVersionHistoryCard = memo<{ work: TaskWorkListItem }>(({ work }) => {
+const TaskWorkVersionHistoryCard = memo<{ work: TaskWorkListItem }>(({ work }) => {
   const [expanded, setExpanded] = useState(true);
   const openTaskDetail = useChatStore((s) => s.openTaskDetail);
   const status = toTaskStatus(work.task.status);
@@ -229,6 +231,56 @@ const WorkVersionHistoryCard = memo<{ work: TaskWorkListItem }>(({ work }) => {
     </Flexbox>
   );
 });
+
+TaskWorkVersionHistoryCard.displayName = 'TaskWorkVersionHistoryCard';
+
+const DocumentWorkVersionHistoryCard = memo<{ work: Extract<WorkListItem, { type: 'document' }> }>(
+  ({ work }) => {
+    const [expanded, setExpanded] = useState(true);
+    const openDocument = useChatStore((s) => s.openDocument);
+    const ToggleIcon = expanded ? ChevronDownIcon : ChevronRightIcon;
+    const label = work.resourceIdentifier ?? work.resourceId;
+
+    return (
+      <Flexbox className={styles.workCard}>
+        <Flexbox
+          horizontal
+          align={'center'}
+          className={styles.header}
+          gap={8}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          <ToggleIcon size={16} />
+          <FileTextIcon className={styles.context} size={16} />
+          <Text className={styles.context} style={{ flexShrink: 0 }}>
+            {label}
+          </Text>
+          <Text
+            ellipsis
+            className={styles.title}
+            onClick={(event) => {
+              event.stopPropagation();
+              openDocument(work.document.id);
+            }}
+          >
+            {work.title}
+          </Text>
+        </Flexbox>
+        {expanded && <VersionList workId={work.id} />}
+      </Flexbox>
+    );
+  },
+);
+
+DocumentWorkVersionHistoryCard.displayName = 'DocumentWorkVersionHistoryCard';
+
+const WorkVersionHistoryCard = memo<{ work: WorkListItem }>(({ work }) =>
+  work.type === 'document' ? (
+    <DocumentWorkVersionHistoryCard work={work} />
+  ) : (
+    <TaskWorkVersionHistoryCard work={work} />
+  ),
+);
 
 WorkVersionHistoryCard.displayName = 'WorkVersionHistoryCard';
 
@@ -272,7 +324,7 @@ const WorksSection = memo(() => {
     data: summaryData = [],
     error: summaryError,
     isLoading: isSummaryLoading,
-  } = useClientDataSWR<TaskWorkSummaryItem[]>(
+  } = useClientDataSWR<WorkSummaryItem[]>(
     mode === 'summary' && topicId
       ? workKeys.conversationSummaries(topicId, threadId ?? null)
       : null,
@@ -287,7 +339,7 @@ const WorksSection = memo(() => {
     data: historyData = [],
     error: historyError,
     isLoading: isHistoryLoading,
-  } = useClientDataSWR<TaskWorkListItem[]>(
+  } = useClientDataSWR<WorkListItem[]>(
     mode === 'history' && topicId ? workKeys.conversation(topicId, threadId ?? null) : null,
     () => workService.listByConversation({ threadId, topicId }),
     {

@@ -1,10 +1,10 @@
 import type { TaskAutomationMode, TaskStatus } from './task';
 
-export type WorkType = 'task';
+export type WorkType = 'document' | 'task';
 export type WorkStatus = 'archived' | 'draft' | 'published';
 export type WorkVisibility = 'private' | 'public' | 'workspace';
-export type WorkResourceType = 'task';
-export type WorkRenderType = 'task_snapshot';
+export type WorkResourceType = 'document' | 'task';
+export type WorkRenderType = 'document_snapshot' | 'task_snapshot';
 export type WorkContentRefType = 'file' | 'inline_snapshot' | 'storage' | 'url';
 export type WorkContextRole =
   | 'created'
@@ -41,8 +41,23 @@ export interface TaskWorkVersionSnapshot {
   totalTopics: number | null;
 }
 
-export interface WorkVersionSnapshot {
-  task: TaskWorkVersionSnapshot;
+export interface DocumentWorkVersionSnapshot {
+  description: string | null;
+  id: string;
+  title: string | null;
+  url: string | null;
+}
+
+export type WorkVersionSnapshot =
+  | {
+      document: DocumentWorkVersionSnapshot;
+    }
+  | {
+      task: TaskWorkVersionSnapshot;
+    };
+
+export interface WorkContextMetadata {
+  agentDocumentId?: string;
 }
 
 export interface WorkVersionMetadata {
@@ -91,6 +106,7 @@ export interface WorkContextItem {
   actorAgentId: string | null;
   createdAt: Date;
   id: string;
+  metadata: WorkContextMetadata | null;
   role: WorkContextRole;
   rootOperationId: string | null;
   source: string;
@@ -106,50 +122,95 @@ export interface WorkContextItem {
 }
 
 export interface TaskWorkListItem extends WorkItem {
+  resourceType: 'task';
   task: {
     description: string | null;
     priority: number | null;
     status: TaskStatus | string | null;
   };
+  type: 'task';
 }
 
+export interface DocumentWorkListItem extends WorkItem {
+  document: DocumentWorkVersionSnapshot;
+  resourceType: 'document';
+  type: 'document';
+}
+
+export type WorkListItem = DocumentWorkListItem | TaskWorkListItem;
+
+export type WorkContextPreview = Pick<
+  WorkContextItem,
+  | 'createdAt'
+  | 'id'
+  | 'metadata'
+  | 'role'
+  | 'rootOperationId'
+  | 'source'
+  | 'sourceMessageId'
+  | 'sourceToolCallId'
+  | 'sourceType'
+>;
+
 export interface TaskWorkContextVersionItem extends TaskWorkListItem {
-  context: Pick<
-    WorkContextItem,
-    | 'createdAt'
-    | 'id'
-    | 'role'
-    | 'rootOperationId'
-    | 'source'
-    | 'sourceMessageId'
-    | 'sourceToolCallId'
-    | 'sourceType'
-  >;
+  context: WorkContextPreview;
   version: Pick<WorkVersionItem, 'createdAt' | 'cumulativeCost' | 'id' | 'title' | 'version'>;
 }
 
+export interface DocumentWorkContextVersionItem extends DocumentWorkListItem {
+  context: WorkContextPreview;
+  version: Pick<WorkVersionItem, 'createdAt' | 'cumulativeCost' | 'id' | 'title' | 'version'>;
+}
+
+export type WorkContextVersionItem = DocumentWorkContextVersionItem | TaskWorkContextVersionItem;
 export type TaskWorkContextVersionMap = Record<string, TaskWorkContextVersionItem[]>;
+export type WorkContextVersionMap = Record<string, WorkContextVersionItem[]>;
 
 export interface TaskWorkSummaryItem extends TaskWorkListItem {
-  context: Pick<
-    WorkContextItem,
-    | 'createdAt'
-    | 'id'
-    | 'role'
-    | 'rootOperationId'
-    | 'source'
-    | 'sourceMessageId'
-    | 'sourceToolCallId'
-    | 'sourceType'
-  >;
+  context: WorkContextPreview;
   totalCost: number | null;
   version: Pick<WorkVersionItem, 'createdAt' | 'id' | 'title' | 'version'> | null;
 }
 
+export interface DocumentWorkSummaryItem extends DocumentWorkListItem {
+  context: WorkContextPreview;
+  totalCost: number | null;
+  version: Pick<WorkVersionItem, 'createdAt' | 'id' | 'title' | 'version'> | null;
+}
+
+export type WorkSummaryItem = DocumentWorkSummaryItem | TaskWorkSummaryItem;
 export type TaskWorkSummaryMap = Record<string, TaskWorkSummaryItem[]>;
+export type WorkSummaryMap = Record<string, WorkSummaryItem[]>;
 
 export interface WorkVersionListItem extends WorkVersionItem {
-  context?: Pick<WorkContextItem, 'createdAt' | 'id' | 'role' | 'source' | 'sourceType'> | null;
+  context?: Pick<
+    WorkContextItem,
+    'createdAt' | 'id' | 'metadata' | 'role' | 'source' | 'sourceType'
+  > | null;
+}
+
+export interface RegisterDocumentWorkParams {
+  actorAgentId?: string | null;
+  agentDocumentId?: string | null;
+  agentId?: string | null;
+  description?: string | null;
+  documentId: string;
+  role: Extract<WorkContextRole, 'created' | 'updated'>;
+  rootOperationId?: string | null;
+  source: string;
+  sourceMessageId?: string | null;
+  sourceToolCallId?: string | null;
+  sourceType?: WorkSourceType;
+  threadId?: string | null;
+  title?: string | null;
+  topicId?: string | null;
+  url?: string | null;
+}
+
+export interface DeleteDocumentWorkParams {
+  agentDocumentId?: string | null;
+  agentId?: string | null;
+  documentId: string;
 }
 
 export interface RegisterTaskWorkParams {

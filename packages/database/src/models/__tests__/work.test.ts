@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { getTestDB } from '../../core/getTestDB';
 import {
+  agents,
   messages,
   tasks,
   threads,
@@ -14,6 +15,7 @@ import {
   workVersions,
 } from '../../schemas';
 import type { LobeChatDatabase } from '../../type';
+import { AgentDocumentModel } from '../agentDocuments';
 import { TaskModel } from '../task';
 import { WorkModel } from '../work';
 
@@ -23,10 +25,16 @@ const userId = 'work-test-user-id';
 const userId2 = 'work-test-user-id-2';
 const topicId = 'work-test-topic-id';
 const threadId = 'work-test-thread-id';
+const agentId = 'work-test-agent-id';
+const agentId2 = 'work-test-agent-id-2';
 
 beforeEach(async () => {
   await serverDB.delete(users);
   await serverDB.insert(users).values([{ id: userId }, { id: userId2 }]);
+  await serverDB.insert(agents).values([
+    { id: agentId, title: 'Work test agent', userId },
+    { id: agentId2, title: 'Work test agent 2', userId: userId2 },
+  ]);
   await serverDB.insert(topics).values({ id: topicId, userId });
   await serverDB.insert(threads).values({
     id: threadId,
@@ -367,6 +375,205 @@ describe('WorkModel', () => {
       version: expect.objectContaining({ title: 'Updated title', version: 2 }),
     });
     expect(byConversation[0].totalCost).toBeCloseTo(0.000_987, 6);
+  });
+
+  it('registers a document work using the backing document id', async () => {
+    const agentDocumentModel = new AgentDocumentModel(serverDB, userId);
+    const workModel = new WorkModel(serverDB, userId);
+    const doc = await agentDocumentModel.create(agentId, 'research.md', 'Research body', {
+      metadata: { description: 'Research notes' },
+      title: 'Research Notes',
+    });
+
+    const work = await workModel.registerDocument({
+      agentDocumentId: doc.id,
+      agentId,
+      documentId: doc.documentId,
+      role: 'created',
+      rootOperationId: 'op-doc-create',
+      source: 'createDocument',
+      sourceToolCallId: 'tool-call-doc-create',
+      title: doc.title,
+      topicId,
+      url: 'https://app.example.com/agent/agent-1/docs/doc-1',
+    });
+
+    expect(work).toBeDefined();
+    expect(work).toMatchObject({
+      resourceId: doc.documentId,
+      resourceIdentifier: 'research.md',
+      resourceType: 'document',
+      title: 'Research Notes',
+      type: 'document',
+    });
+
+    const versions = await workModel.listVersions(work!.id);
+    expect(versions).toHaveLength(1);
+    expect(versions[0].snapshot).toMatchObject({
+      document: {
+        description: 'Research notes',
+        id: doc.documentId,
+        title: 'Research Notes',
+        url: 'https://app.example.com/agent/agent-1/docs/doc-1',
+      },
+    });
+    expect(versions[0].context?.metadata).toEqual({ agentDocumentId: doc.id });
+
+    const [context] = await serverDB
+      .select()
+      .from(workContexts)
+      .where(eq(workContexts.workId, work!.id));
+    expect(context).toMatchObject({
+      metadata: { agentDocumentId: doc.id },
+      rootOperationId: 'op-doc-create',
+      sourceToolCallId: 'tool-call-doc-create',
+    });
+
+    const byOperation = await workModel.listByRootOperation({ rootOperationId: 'op-doc-create' });
+    expect(byOperation[0]).toMatchObject({
+      document: expect.objectContaining({ id: doc.documentId, title: 'Research Notes' }),
+      id: work?.id,
+      type: 'document',
+    });
+
+    const summaries = await workModel.listSummariesByRootOperations({
+      rootOperationIds: ['op-doc-create'],
+    });
+    expect(summaries['op-doc-create']?.[0]).toMatchObject({
+      context: expect.objectContaining({
+        metadata: { agentDocumentId: doc.id },
+      }),
+      document: expect.objectContaining({ description: 'Research notes', id: doc.documentId }),
+      id: work?.id,
+      type: 'document',
+    });
+  });
+
+  it('keeps one document work row and appends versions for document edits', async () => {
+    const agentDocumentModel = new AgentDocumentModel(serverDB, userId);
+    const workModel = new WorkModel(serverDB, userId);
+    const doc = await agentDocumentModel.create(agentId, 'draft.md', 'Draft body', {
+      title: 'Draft',
+    });
+
+    const first = await workModel.registerDocument({
+      agentDocumentId: doc.id,
+      agentId,
+      documentId: doc.documentId,
+      role: 'created',
+      rootOperationId: 'op-doc-create',
+      source: 'createDocument',
+      sourceToolCallId: 'tool-call-doc-create',
+      title: 'Draft',
+      topicId,
+    });
+
+    await agentDocumentModel.rename(doc.id, 'Renamed Draft');
+
+    const second = await workModel.registerDocument({
+      agentDocumentId: doc.id,
+      agentId,
+      documentId: doc.documentId,
+      role: 'updated',
+      rootOperationId: 'op-doc-rename',
+      source: 'renameDocument',
+      sourceToolCallId: 'tool-call-doc-rename',
+      title: 'Renamed Draft',
+      topicId,
+    });
+
+    const replay = await workModel.registerDocument({
+      agentDocumentId: doc.id,
+      agentId,
+      documentId: doc.documentId,
+      role: 'updated',
+      rootOperationId: 'op-doc-rename',
+      source: 'renameDocument',
+      sourceToolCallId: 'tool-call-doc-rename',
+      title: 'Renamed Draft',
+      topicId,
+    });
+
+    expect(second?.id).toBe(first?.id);
+    expect(replay?.id).toBe(first?.id);
+
+    const workRows = await serverDB
+      .select()
+      .from(works)
+      .where(eq(works.resourceId, doc.documentId));
+    expect(workRows).toHaveLength(1);
+
+    const versions = await workModel.listVersions(first!.id);
+    expect(versions.map((item) => item.version)).toEqual([2, 1]);
+    expect(versions[0].snapshot).toMatchObject({
+      document: { id: doc.documentId, title: 'Renamed Draft' },
+    });
+
+    const contexts = await serverDB
+      .select()
+      .from(workContexts)
+      .where(eq(workContexts.workId, first!.id));
+    expect(contexts).toHaveLength(2);
+  });
+
+  it('deletes document work and cascades versions and contexts when agent document is removed', async () => {
+    const agentDocumentModel = new AgentDocumentModel(serverDB, userId);
+    const workModel = new WorkModel(serverDB, userId);
+    const doc = await agentDocumentModel.create(agentId, 'delete.md', 'Delete body', {
+      title: 'Delete me',
+    });
+
+    const work = await workModel.registerDocument({
+      agentDocumentId: doc.id,
+      agentId,
+      documentId: doc.documentId,
+      role: 'created',
+      source: 'createDocument',
+      sourceToolCallId: 'tool-call-doc-delete',
+      title: doc.title,
+    });
+
+    await agentDocumentModel.delete(doc.id);
+    await workModel.deleteDocumentWork({
+      agentDocumentId: doc.id,
+      agentId,
+      documentId: doc.documentId,
+    });
+
+    const workRows = await serverDB.select().from(works).where(eq(works.id, work!.id));
+    const versionRows = await serverDB
+      .select()
+      .from(workVersions)
+      .where(eq(workVersions.workId, work!.id));
+    const contextRows = await serverDB
+      .select()
+      .from(workContexts)
+      .where(eq(workContexts.workId, work!.id));
+
+    expect(workRows).toHaveLength(0);
+    expect(versionRows).toHaveLength(0);
+    expect(contextRows).toHaveLength(0);
+  });
+
+  it('does not let another user register someone else document work', async () => {
+    const agentDocumentModel = new AgentDocumentModel(serverDB, userId);
+    const otherWorkModel = new WorkModel(serverDB, userId2);
+    const doc = await agentDocumentModel.create(agentId, 'private.md', 'Private body');
+
+    const work = await otherWorkModel.registerDocument({
+      agentDocumentId: doc.id,
+      agentId,
+      documentId: doc.documentId,
+      role: 'created',
+      source: 'createDocument',
+      sourceToolCallId: 'tool-call-other-doc-user',
+      title: doc.title,
+      topicId,
+    });
+
+    expect(work).toBeNull();
+    const workRows = await serverDB.select().from(works);
+    expect(workRows).toHaveLength(0);
   });
 
   it('does not let another user register someone else task', async () => {

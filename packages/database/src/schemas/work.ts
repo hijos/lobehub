@@ -1,5 +1,6 @@
 import type {
   WorkContentRefType,
+  WorkContextMetadata,
   WorkContextRole,
   WorkRenderType,
   WorkResourceType,
@@ -141,6 +142,8 @@ export const workContexts = pgTable(
     sourceToolCallId: text('source_tool_call_id'),
     /** Agent that triggered the Work change, when the source is agent/tool driven. */
     actorAgentId: text('actor_agent_id').references(() => agents.id, { onDelete: 'set null' }),
+    /** Resource-specific tool provenance, such as the agent document binding used by a document tool. */
+    metadata: jsonb('metadata').$type<WorkContextMetadata>(),
 
     userId: text('user_id')
       .references(() => users.id, { onDelete: 'cascade' })

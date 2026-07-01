@@ -2,9 +2,9 @@
 
 import type {
   AssistantContentBlock,
-  TaskWorkSummaryItem,
-  TaskWorkSummaryMap,
   UIChatMessage,
+  WorkSummaryItem,
+  WorkSummaryMap,
 } from '@lobechat/types';
 import { Flexbox } from '@lobehub/ui';
 import { createStaticStyles } from 'antd-style';
@@ -84,7 +84,7 @@ const MessageWorks = memo<MessageWorksProps>(({ rootOperationId }) => {
     [displayMessages],
   );
 
-  const { data: workSummaryMap = {} } = useClientDataSWR<TaskWorkSummaryMap>(
+  const { data: workSummaryMap = {} } = useClientDataSWR<WorkSummaryMap>(
     rootOperationId && rootOperationIds.length > 0
       ? workKeys.rootOperationSummaries(rootOperationIds)
       : null,
@@ -95,9 +95,7 @@ const MessageWorks = memo<MessageWorksProps>(({ rootOperationId }) => {
       revalidateOnFocus: false,
     },
   );
-  const data: TaskWorkSummaryItem[] = rootOperationId
-    ? (workSummaryMap[rootOperationId] ?? [])
-    : [];
+  const data: WorkSummaryItem[] = rootOperationId ? (workSummaryMap[rootOperationId] ?? []) : [];
 
   if (data.length === 0) return null;
 

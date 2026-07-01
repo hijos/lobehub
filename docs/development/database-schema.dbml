@@ -2666,6 +2666,7 @@ table work_contexts {
   root_operation_id text
   source_tool_call_id text
   actor_agent_id text
+  metadata jsonb
   user_id text [not null]
   workspace_id text
   created_at "timestamp with time zone" [not null, default: `now()`]

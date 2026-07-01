@@ -10,9 +10,11 @@ import { emitAgentDocumentToolOutcomeSafely } from '@/server/services/agentDocum
 import { agentDocumentRouter } from '../agentDocument';
 
 const agentDocumentMocks = vi.hoisted(() => ({
+  deleteDocumentWork: vi.fn(),
   emitAgentDocumentToolOutcomeSafely: vi.fn(),
   findTopicById: vi.fn(),
   getServerDB: vi.fn(),
+  registerDocument: vi.fn(),
 }));
 
 vi.mock('@/database/core/db-adaptor', () => ({
@@ -38,6 +40,13 @@ vi.mock('@/database/models/topicDocument', () => ({
   TopicDocumentModel: vi.fn(),
 }));
 
+vi.mock('@/database/models/work', () => ({
+  WorkModel: vi.fn().mockImplementation(() => ({
+    deleteDocumentWork: agentDocumentMocks.deleteDocumentWork,
+    registerDocument: agentDocumentMocks.registerDocument,
+  })),
+}));
+
 vi.mock('@/server/services/agentDocuments', () => ({
   AgentDocumentsService: vi.fn(),
 }));
@@ -55,6 +64,9 @@ const createCaller = createCallerFactory(agentDocumentRouter);
 interface MockAgentDocumentsService {
   createDocument: ReturnType<typeof vi.fn>;
   createForTopic: ReturnType<typeof vi.fn>;
+  getDocumentById: ReturnType<typeof vi.fn>;
+  removeDocumentById: ReturnType<typeof vi.fn>;
+  renameDocumentById: ReturnType<typeof vi.fn>;
 }
 
 describe('agentDocumentRouter tool outcomes', () => {
@@ -69,12 +81,17 @@ describe('agentDocumentRouter tool outcomes', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    agentDocumentMocks.deleteDocumentWork.mockResolvedValue(undefined);
     agentDocumentMocks.getServerDB.mockResolvedValue({ kind: 'server-db' });
     agentDocumentMocks.findTopicById.mockResolvedValue({ title: 'Topic fallback' });
+    agentDocumentMocks.registerDocument.mockResolvedValue({ id: 'work-1' });
 
     serviceImpl = {
       createDocument: vi.fn().mockResolvedValue(createdDocument),
       createForTopic: vi.fn().mockResolvedValue(createdDocument),
+      getDocumentById: vi.fn().mockResolvedValue(createdDocument),
+      removeDocumentById: vi.fn().mockResolvedValue(true),
+      renameDocumentById: vi.fn().mockResolvedValue({ ...createdDocument, title: 'Renamed' }),
     };
     vi.mocked(AgentDocumentsService).mockImplementation(
       () => serviceImpl as unknown as AgentDocumentsService,
@@ -93,7 +110,9 @@ describe('agentDocumentRouter tool outcomes', () => {
         messageId: 'message-1',
         operationId: 'operation-1',
         taskId: 'task-1',
+        threadId: 'thread-1',
         toolCallId: 'tool-call-1',
+        toolMessageId: 'tool-message-1',
         topicId: 'topic-1',
       },
       trigger: 'tool',
@@ -116,6 +135,20 @@ describe('agentDocumentRouter tool outcomes', () => {
         userId: 'user-1',
       }),
     );
+    expect(agentDocumentMocks.registerDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDocumentId: 'agent-document-1',
+        agentId: 'agent-1',
+        documentId: 'document-1',
+        role: 'created',
+        rootOperationId: 'operation-1',
+        source: 'createDocument',
+        sourceMessageId: 'tool-message-1',
+        sourceToolCallId: 'tool-call-1',
+        threadId: 'thread-1',
+        topicId: 'topic-1',
+      }),
+    );
   });
 
   it('does not emit outcome for normal createDocument', async () => {
@@ -128,6 +161,7 @@ describe('agentDocumentRouter tool outcomes', () => {
     });
 
     expect(emitAgentDocumentToolOutcomeSafely).not.toHaveBeenCalled();
+    expect(agentDocumentMocks.registerDocument).not.toHaveBeenCalled();
   });
 
   it('rejects tool trigger without toolContext', async () => {
@@ -155,7 +189,9 @@ describe('agentDocumentRouter tool outcomes', () => {
         messageId: 'message-1',
         operationId: 'operation-1',
         taskId: null,
+        threadId: 'thread-1',
         toolCallId: 'tool-call-1',
+        toolMessageId: 'tool-message-1',
       },
       trigger: 'tool',
     });
@@ -174,6 +210,77 @@ describe('agentDocumentRouter tool outcomes', () => {
         toolCallId: 'tool-call-1',
         topicId: 'topic-1',
         userId: 'user-1',
+      }),
+    );
+    expect(agentDocumentMocks.registerDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDocumentId: 'agent-document-1',
+        agentId: 'agent-1',
+        documentId: 'document-1',
+        role: 'created',
+        rootOperationId: 'operation-1',
+        source: 'createForTopic',
+        sourceMessageId: 'tool-message-1',
+        sourceToolCallId: 'tool-call-1',
+        threadId: 'thread-1',
+        topicId: 'topic-1',
+      }),
+    );
+  });
+
+  it('registers updated document work for attributed renameDocument', async () => {
+    const caller = createCaller(await createContextInner({ userId: 'user-1' }));
+
+    await caller.renameDocument({
+      agentId: 'agent-1',
+      id: 'agent-document-1',
+      newTitle: 'Renamed',
+      toolContext: {
+        messageId: 'message-1',
+        operationId: 'operation-1',
+        rootOperationId: 'root-operation-1',
+        threadId: 'thread-rename',
+        toolCallId: 'tool-call-rename',
+        toolMessageId: 'tool-message-rename',
+      },
+      trigger: 'tool',
+    });
+
+    expect(agentDocumentMocks.registerDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDocumentId: 'agent-document-1',
+        agentId: 'agent-1',
+        documentId: 'document-1',
+        role: 'updated',
+        rootOperationId: 'root-operation-1',
+        source: 'renameDocument',
+        sourceMessageId: 'tool-message-rename',
+        sourceToolCallId: 'tool-call-rename',
+        threadId: 'thread-rename',
+        title: 'Renamed',
+      }),
+    );
+  });
+
+  it('deletes document work for attributed removeDocument', async () => {
+    const caller = createCaller(await createContextInner({ userId: 'user-1' }));
+
+    await caller.removeDocument({
+      agentId: 'agent-1',
+      id: 'agent-document-1',
+      toolContext: {
+        messageId: 'message-1',
+        operationId: 'operation-1',
+        toolCallId: 'tool-call-remove',
+      },
+      trigger: 'tool',
+    });
+
+    expect(agentDocumentMocks.deleteDocumentWork).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDocumentId: 'agent-document-1',
+        agentId: 'agent-1',
+        documentId: 'document-1',
       }),
     );
   });

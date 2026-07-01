@@ -1,9 +1,9 @@
 'use client';
 
-import type { TaskWorkSummaryItem } from '@lobechat/types';
+import type { WorkSummaryItem } from '@lobechat/types';
 import { Flexbox, Text } from '@lobehub/ui';
 import { createStaticStyles } from 'antd-style';
-import { ClipboardListIcon } from 'lucide-react';
+import { ClipboardListIcon, FileTextIcon } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -56,16 +56,27 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
 
 interface WorkSummaryCardProps {
   className?: string;
-  item: TaskWorkSummaryItem;
+  item: WorkSummaryItem;
 }
 
 const WorkSummaryCard = memo<WorkSummaryCardProps>(({ className, item }) => {
   const { t } = useTranslation('chat');
-  const openTaskDetail = useChatStore((s) => s.openTaskDetail);
-  const taskIdentifier = item.resourceIdentifier ?? item.resourceId;
+  const [openDocument, openTaskDetail] = useChatStore((s) => [s.openDocument, s.openTaskDetail]);
   const cost = formatWorkVersionCost(item.totalCost);
   const title = item.version?.title || item.title;
-  const description = item.task.description?.trim();
+  const isDocument = item.type === 'document';
+  const description = isDocument
+    ? item.document.description?.trim()
+    : item.task.description?.trim();
+  const Icon = isDocument ? FileTextIcon : ClipboardListIcon;
+  const handleOpen = () => {
+    if (isDocument) {
+      openDocument(item.document.id, item.context.metadata?.agentDocumentId);
+      return;
+    }
+
+    openTaskDetail(item.resourceIdentifier ?? item.resourceId);
+  };
 
   return (
     <Flexbox
@@ -73,10 +84,10 @@ const WorkSummaryCard = memo<WorkSummaryCardProps>(({ className, item }) => {
       align={'center'}
       className={[styles.card, className].filter(Boolean).join(' ')}
       gap={12}
-      onClick={() => openTaskDetail(taskIdentifier)}
+      onClick={handleOpen}
     >
       <Flexbox align={'center'} className={styles.icon} justify={'center'}>
-        <ClipboardListIcon size={18} />
+        <Icon size={18} />
       </Flexbox>
       <Flexbox flex={1} gap={6} style={{ minWidth: 0 }}>
         <Flexbox horizontal align={'center'} gap={8} justify={'space-between'}>

@@ -1,4 +1,4 @@
-import type { TaskWorkSummaryItem, WorkVersionListItem } from '@lobechat/types';
+import type { WorkSummaryItem, WorkVersionListItem } from '@lobechat/types';
 
 const PENDING_COST_REFRESH_WINDOW = 2 * 60 * 1000;
 const PENDING_COST_REFRESH_INTERVAL = 2000;
@@ -16,8 +16,8 @@ interface PendingCostItem {
   createdAt: Date | string;
 }
 
-type WorkSummaryCostRefreshItem = Pick<TaskWorkSummaryItem, 'totalCost'> & {
-  context: Pick<TaskWorkSummaryItem['context'], 'createdAt'>;
+type WorkSummaryCostRefreshItem = Pick<WorkSummaryItem, 'totalCost'> & {
+  context: Pick<WorkSummaryItem['context'], 'createdAt'>;
 };
 
 const getPendingCostRefreshInterval = (items?: PendingCostItem[] | null, now = Date.now()) => {

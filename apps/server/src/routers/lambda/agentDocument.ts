@@ -14,6 +14,7 @@ import { TopicTrigger } from '@/const/topic';
 import { AgentDocumentModel, deriveAgentDocumentFields } from '@/database/models/agentDocuments';
 import { TopicModel } from '@/database/models/topic';
 import { TopicDocumentModel } from '@/database/models/topicDocument';
+import { WorkModel } from '@/database/models/work';
 import { router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
 import { AgentDocumentsService } from '@/server/services/agentDocuments';
@@ -95,8 +96,11 @@ const mountedSkillNamespaceSchema = z.literal('agent');
 const agentDocumentToolContextSchema = z.object({
   messageId: z.string(),
   operationId: z.string().optional(),
+  rootOperationId: z.string().optional(),
   taskId: z.string().nullish(),
+  threadId: z.string().nullish(),
   toolCallId: z.string(),
+  toolMessageId: z.string().optional(),
   topicId: z.string().optional(),
 });
 const agentDocumentToolTriggerSchema = z
@@ -168,6 +172,7 @@ const agentDocumentProcedure = wsCompatProcedure.use(serverDatabase).use(async (
       systemAgentService: new SystemAgentService(ctx.serverDB, ctx.userId, wsId),
       topicModel: new TopicModel(ctx.serverDB, ctx.userId, wsId),
       topicDocumentModel: new TopicDocumentModel(ctx.serverDB, ctx.userId, wsId),
+      workModel: new WorkModel(ctx.serverDB, ctx.userId, wsId),
     },
   });
 });
@@ -214,6 +219,61 @@ const emitCreateDocumentToolOutcome = async (input: {
     topicId: input.topicId ?? toolContext.topicId,
     userId: input.userId,
   });
+};
+
+const registerDocumentWorkFromTool = async (input: {
+  agentDocumentId?: string;
+  agentId: string;
+  description?: string | null;
+  documentId?: string;
+  role: 'created' | 'updated';
+  source: string;
+  title?: string | null;
+  toolContext?: z.infer<typeof agentDocumentToolContextSchema>;
+  topicId?: string;
+  workModel: WorkModel;
+}) => {
+  if (!input.toolContext || !input.documentId) return;
+
+  try {
+    await input.workModel.registerDocument({
+      actorAgentId: input.agentId,
+      agentDocumentId: input.agentDocumentId,
+      agentId: input.agentId,
+      description: input.description,
+      documentId: input.documentId,
+      role: input.role,
+      rootOperationId: input.toolContext.rootOperationId ?? input.toolContext.operationId,
+      source: input.source,
+      sourceMessageId: input.toolContext.toolMessageId ?? input.toolContext.messageId,
+      sourceToolCallId: input.toolContext.toolCallId,
+      sourceType: 'tool',
+      threadId: input.toolContext.threadId,
+      title: input.title,
+      topicId: input.topicId ?? input.toolContext.topicId,
+    });
+  } catch (error) {
+    console.error('[agentDocumentRouter] register document work failed:', error);
+  }
+};
+
+const deleteDocumentWorkFromTool = async (input: {
+  agentDocumentId?: string;
+  agentId: string;
+  documentId?: string;
+  workModel: WorkModel;
+}) => {
+  if (!input.documentId) return;
+
+  try {
+    await input.workModel.deleteDocumentWork({
+      agentDocumentId: input.agentDocumentId,
+      agentId: input.agentId,
+      documentId: input.documentId,
+    });
+  } catch (error) {
+    console.error('[agentDocumentRouter] delete document work failed:', error);
+  }
 };
 
 /**
@@ -995,6 +1055,17 @@ export const agentDocumentRouter = router({
             toolContext: input.toolContext,
             userId: ctx.userId,
           });
+          await registerDocumentWorkFromTool({
+            agentDocumentId: doc?.id,
+            agentId: input.agentId,
+            description: doc?.description,
+            documentId: doc?.documentId,
+            role: 'created',
+            source: 'createDocument',
+            title: doc?.title ?? input.title,
+            toolContext: input.toolContext,
+            workModel: ctx.workModel,
+          });
         }
 
         return doc;
@@ -1054,6 +1125,18 @@ export const agentDocumentRouter = router({
             topicId: input.topicId,
             userId: ctx.userId,
           });
+          await registerDocumentWorkFromTool({
+            agentDocumentId: doc?.id,
+            agentId: input.agentId,
+            description: doc?.description,
+            documentId: doc?.documentId,
+            role: 'created',
+            source: 'createForTopic',
+            title: doc?.title ?? title,
+            toolContext: input.toolContext,
+            topicId: input.topicId,
+            workModel: ctx.workModel,
+          });
         }
 
         return doc;
@@ -1097,18 +1180,35 @@ export const agentDocumentRouter = router({
    */
   modifyNodes: agentDocumentProcedureWrite
     .input(
-      z.object({
-        agentId: z.string(),
-        id: z.string(),
-        operations: z.array(liteXMLOperationSchema).min(1),
-      }),
+      z
+        .object({
+          agentId: z.string(),
+          id: z.string(),
+          operations: z.array(liteXMLOperationSchema).min(1),
+        })
+        .and(agentDocumentToolTriggerSchema),
     )
     .mutation(async ({ ctx, input }) => {
-      return ctx.agentDocumentService.modifyDocumentNodesById(
+      const doc = await ctx.agentDocumentService.modifyDocumentNodesById(
         input.id,
         input.operations,
         input.agentId,
       );
+      if (input.trigger === 'tool') {
+        await registerDocumentWorkFromTool({
+          agentDocumentId: input.id,
+          agentId: input.agentId,
+          description: doc?.description,
+          documentId: doc?.documentId,
+          role: 'updated',
+          source: 'modifyNodes',
+          title: doc?.title,
+          toolContext: input.toolContext,
+          workModel: ctx.workModel,
+        });
+      }
+
+      return doc;
     }),
 
   /**
@@ -1116,18 +1216,35 @@ export const agentDocumentRouter = router({
    */
   replaceDocumentContent: agentDocumentProcedureWrite
     .input(
-      z.object({
-        agentId: z.string(),
-        content: z.string(),
-        id: z.string(),
-      }),
+      z
+        .object({
+          agentId: z.string(),
+          content: z.string(),
+          id: z.string(),
+        })
+        .and(agentDocumentToolTriggerSchema),
     )
     .mutation(async ({ ctx, input }) => {
-      return ctx.agentDocumentService.replaceDocumentContentById(
+      const doc = await ctx.agentDocumentService.replaceDocumentContentById(
         input.id,
         input.content,
         input.agentId,
       );
+      if (input.trigger === 'tool') {
+        await registerDocumentWorkFromTool({
+          agentDocumentId: input.id,
+          agentId: input.agentId,
+          description: doc?.description,
+          documentId: doc?.documentId,
+          role: 'updated',
+          source: 'replaceDocumentContent',
+          title: doc?.title,
+          toolContext: input.toolContext,
+          workModel: ctx.workModel,
+        });
+      }
+
+      return doc;
     }),
 
   /**
@@ -1135,13 +1252,25 @@ export const agentDocumentRouter = router({
    */
   removeDocument: agentDocumentProcedureWrite
     .input(
-      z.object({
-        agentId: z.string(),
-        id: z.string(),
-      }),
+      z
+        .object({
+          agentId: z.string(),
+          id: z.string(),
+        })
+        .and(agentDocumentToolTriggerSchema),
     )
     .mutation(async ({ ctx, input }) => {
+      const doc = await ctx.agentDocumentService.getDocumentById(input.id, input.agentId);
       const deleted = await ctx.agentDocumentService.removeDocumentById(input.id, input.agentId);
+      if (deleted && input.trigger === 'tool') {
+        await deleteDocumentWorkFromTool({
+          agentDocumentId: input.id,
+          agentId: input.agentId,
+          documentId: doc?.documentId,
+          workModel: ctx.workModel,
+        });
+      }
+
       return { deleted, id: input.id };
     }),
 
@@ -1150,19 +1279,36 @@ export const agentDocumentRouter = router({
    */
   copyDocument: agentDocumentProcedureWrite
     .input(
-      z.object({
-        agentId: z.string(),
-        id: z.string(),
-        newTitle: z.string().optional(),
-      }),
+      z
+        .object({
+          agentId: z.string(),
+          id: z.string(),
+          newTitle: z.string().optional(),
+        })
+        .and(agentDocumentToolTriggerSchema),
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.agentDocumentService.copyDocumentById(
+        const doc = await ctx.agentDocumentService.copyDocumentById(
           input.id,
           input.newTitle,
           input.agentId,
         );
+        if (input.trigger === 'tool') {
+          await registerDocumentWorkFromTool({
+            agentDocumentId: doc?.id,
+            agentId: input.agentId,
+            description: doc?.description,
+            documentId: doc?.documentId,
+            role: 'created',
+            source: 'copyDocument',
+            title: doc?.title ?? input.newTitle,
+            toolContext: input.toolContext,
+            workModel: ctx.workModel,
+          });
+        }
+
+        return doc;
       } catch (error) {
         handleAgentDocumentVfsError(error);
       }
@@ -1173,19 +1319,36 @@ export const agentDocumentRouter = router({
    */
   renameDocument: agentDocumentProcedureWrite
     .input(
-      z.object({
-        agentId: z.string(),
-        id: z.string(),
-        newTitle: z.string(),
-      }),
+      z
+        .object({
+          agentId: z.string(),
+          id: z.string(),
+          newTitle: z.string(),
+        })
+        .and(agentDocumentToolTriggerSchema),
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.agentDocumentService.renameDocumentById(
+        const doc = await ctx.agentDocumentService.renameDocumentById(
           input.id,
           input.newTitle,
           input.agentId,
         );
+        if (input.trigger === 'tool') {
+          await registerDocumentWorkFromTool({
+            agentDocumentId: input.id,
+            agentId: input.agentId,
+            description: doc?.description,
+            documentId: doc?.documentId,
+            role: 'updated',
+            source: 'renameDocument',
+            title: doc?.title ?? input.newTitle,
+            toolContext: input.toolContext,
+            workModel: ctx.workModel,
+          });
+        }
+
+        return doc;
       } catch (error) {
         handleAgentDocumentVfsError(error);
       }

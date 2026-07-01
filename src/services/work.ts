@@ -1,12 +1,12 @@
 import type {
   RegisterTaskWorkParams,
-  TaskWorkContextVersionItem,
-  TaskWorkContextVersionMap,
-  TaskWorkListItem,
-  TaskWorkSummaryItem,
-  TaskWorkSummaryMap,
   UpdateWorkVersionCumulativeUsageParams,
+  WorkContextVersionItem,
+  WorkContextVersionMap,
   WorkItem,
+  WorkListItem,
+  WorkSummaryItem,
+  WorkSummaryMap,
   WorkVersionListItem,
 } from '@lobechat/types';
 
@@ -19,28 +19,28 @@ class WorkService {
     limit?: number;
     threadId?: string | null;
     topicId?: string | null;
-  }): Promise<TaskWorkListItem[]> => lambdaClient.work.listByConversation.query(params);
+  }): Promise<WorkListItem[]> => lambdaClient.work.listByConversation.query(params);
 
   listByRootOperation = async (params: {
     limit?: number;
     rootOperationId?: string | null;
-  }): Promise<TaskWorkContextVersionItem[]> => lambdaClient.work.listByRootOperation.query(params);
+  }): Promise<WorkContextVersionItem[]> => lambdaClient.work.listByRootOperation.query(params);
 
   listByRootOperations = async (params: {
     limit?: number;
     rootOperationIds?: string[] | null;
-  }): Promise<TaskWorkContextVersionMap> => lambdaClient.work.listByRootOperations.query(params);
+  }): Promise<WorkContextVersionMap> => lambdaClient.work.listByRootOperations.query(params);
 
   listSummariesByConversation = async (params: {
     limit?: number;
     threadId?: string | null;
     topicId?: string | null;
-  }): Promise<TaskWorkSummaryItem[]> => lambdaClient.work.listSummariesByConversation.query(params);
+  }): Promise<WorkSummaryItem[]> => lambdaClient.work.listSummariesByConversation.query(params);
 
   listSummariesByRootOperations = async (params: {
     limit?: number;
     rootOperationIds?: string[] | null;
-  }): Promise<TaskWorkSummaryMap> => lambdaClient.work.listSummariesByRootOperations.query(params);
+  }): Promise<WorkSummaryMap> => lambdaClient.work.listSummariesByRootOperations.query(params);
 
   listVersions = async (workId: string): Promise<WorkVersionListItem[]> =>
     lambdaClient.work.listVersions.query({ workId });

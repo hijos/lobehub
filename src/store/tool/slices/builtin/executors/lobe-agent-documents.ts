@@ -7,9 +7,17 @@ import { isDesktop } from '@lobechat/const';
 import { getActiveWorkspaceSlug } from '@/business/client/hooks/useActiveWorkspaceSlug';
 import { agentDocumentService } from '@/services/agentDocument';
 import { invalidateDocumentMutation } from '@/services/document/invalidation';
+import { workService } from '@/services/work';
 import { useAgentStore } from '@/store/agent';
 import { useElectronStore } from '@/store/electron';
 import { electronSyncSelectors } from '@/store/electron/selectors';
+
+interface DocumentWorkRefreshContext {
+  operationId?: string;
+  rootOperationId?: string;
+  threadId?: string | null;
+  topicId?: string;
+}
 
 /**
  * App origin for share links. Desktop points at the connected remote server so
@@ -20,19 +28,43 @@ const getAppOrigin = (): string | undefined => {
   return typeof window === 'undefined' ? undefined : window.location.origin;
 };
 
+const refreshDocumentWorks = async (context?: DocumentWorkRefreshContext) => {
+  if (!context) return;
+
+  const rootOperationId = context.rootOperationId ?? context.operationId;
+  await Promise.all([
+    workService.refreshConversation(context.topicId, context.threadId),
+    workService.refreshRootOperation(rootOperationId),
+  ]).catch((error) => {
+    console.error('[AgentDocumentsExecutor] refresh document works failed:', error);
+  });
+};
+
+const withWorkRefresh = async <T>(operation: Promise<T>, context?: DocumentWorkRefreshContext) => {
+  const result = await operation;
+  await refreshDocumentWorks(context);
+  return result;
+};
+
 const runtime = new AgentDocumentsExecutionRuntime(
   {
-    copyDocument: ({ agentId, id, newTitle }) =>
-      agentDocumentService.copyDocument({ agentId, id, newTitle }),
-    createDocument: ({ agentId, content, hintIsSkill, title, toolContext, trigger }) =>
-      agentDocumentService.createDocument({
-        agentId,
-        content,
-        hintIsSkill,
-        title,
+    copyDocument: ({ agentId, id, newTitle, toolContext, trigger }) =>
+      withWorkRefresh(
+        agentDocumentService.copyDocument({ agentId, id, newTitle, toolContext, trigger }),
         toolContext,
-        trigger,
-      }),
+      ),
+    createDocument: ({ agentId, content, hintIsSkill, title, toolContext, trigger }) =>
+      withWorkRefresh(
+        agentDocumentService.createDocument({
+          agentId,
+          content,
+          hintIsSkill,
+          title,
+          toolContext,
+          trigger,
+        }),
+        toolContext,
+      ),
     createTopicDocument: ({
       agentId,
       content,
@@ -42,15 +74,18 @@ const runtime = new AgentDocumentsExecutionRuntime(
       topicId,
       trigger,
     }) =>
-      agentDocumentService.createForTopic({
-        agentId,
-        content,
-        hintIsSkill,
-        title,
+      withWorkRefresh(
+        agentDocumentService.createForTopic({
+          agentId,
+          content,
+          hintIsSkill,
+          title,
+          toolContext,
+          topicId,
+          trigger,
+        }),
         toolContext,
-        topicId,
-        trigger,
-      }),
+      ),
     listDocuments: async ({ agentId, parentId, sourceType }) => {
       // The agent listing tool surfaces archived `.tool-results` so the model can
       // discover them; user-facing lists keep the default (filtered) behavior.
@@ -83,16 +118,30 @@ const runtime = new AgentDocumentsExecutionRuntime(
         title: d.title,
       }));
     },
-    modifyNodes: ({ agentId, id, operations }) =>
-      agentDocumentService.modifyNodes({ agentId, id, operations }),
+    modifyNodes: ({ agentId, id, operations, toolContext, trigger }) =>
+      withWorkRefresh(
+        agentDocumentService.modifyNodes({ agentId, id, operations, toolContext, trigger }),
+        toolContext,
+      ),
     readDocument: ({ agentId, format, id }) =>
       agentDocumentService.readDocument({ agentId, format: format ?? 'xml', id }),
-    removeDocument: async ({ agentId, id }) =>
-      (await agentDocumentService.removeDocument({ agentId, id })).deleted,
-    renameDocument: ({ agentId, id, newTitle }) =>
-      agentDocumentService.renameDocument({ agentId, id, newTitle }),
-    replaceDocumentContent: ({ agentId, content, id }) =>
-      agentDocumentService.replaceDocumentContent({ agentId, content, id }),
+    removeDocument: async ({ agentId, id, toolContext, trigger }) =>
+      (
+        await withWorkRefresh(
+          agentDocumentService.removeDocument({ agentId, id, toolContext, trigger }),
+          toolContext,
+        )
+      ).deleted,
+    renameDocument: ({ agentId, id, newTitle, toolContext, trigger }) =>
+      withWorkRefresh(
+        agentDocumentService.renameDocument({ agentId, id, newTitle, toolContext, trigger }),
+        toolContext,
+      ),
+    replaceDocumentContent: ({ agentId, content, id, toolContext, trigger }) =>
+      withWorkRefresh(
+        agentDocumentService.replaceDocumentContent({ agentId, content, id, toolContext, trigger }),
+        toolContext,
+      ),
     updateLoadRule: ({ agentId, id, rule }) =>
       agentDocumentService.updateLoadRule({
         agentId,

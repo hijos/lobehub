@@ -631,7 +631,7 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
       verifyCriteriaIds?: string[] | null;
       verifyRubricId?: string | null;
     },
-    _ctx?: BuiltinToolContext,
+    ctx?: BuiltinToolContext,
   ): Promise<BuiltinToolResult> => {
     try {
       log('[TaskExecutor] setTaskVerify - params:', params);
@@ -708,6 +708,12 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
 
       await taskService.updateVerifyConfig({ id: identifier, verify });
       await getTaskStoreState().internal_refreshTaskDetail(identifier);
+      await registerTaskWork({
+        ctx,
+        role: 'updated',
+        source: TaskApiName.setTaskVerify,
+        taskIdentifier: identifier,
+      });
 
       return {
         content: formatTaskEdited(identifier, changes),

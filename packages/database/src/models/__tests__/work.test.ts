@@ -449,6 +449,55 @@ describe('WorkModel', () => {
     });
   });
 
+  it('uses the document content prefix when document description is empty', async () => {
+    const agentDocumentModel = new AgentDocumentModel(serverDB, userId);
+    const workModel = new WorkModel(serverDB, userId);
+    const content = [
+      'This document explains how Work cards should display a useful document excerpt.',
+      'It keeps the product panel populated even when document metadata has no description.',
+      'The extra sentence makes the value long enough to verify truncation.',
+    ].join('\n\n');
+    const normalizedContent = content.replaceAll(/\s+/g, ' ').trim();
+    const expectedDescription = `${normalizedContent.slice(0, 120)}...`;
+    const doc = await agentDocumentModel.create(agentId, 'empty-description.md', content, {
+      title: 'No Description',
+    });
+
+    const work = await workModel.registerDocument({
+      agentDocumentId: doc.id,
+      agentId,
+      documentId: doc.documentId,
+      role: 'created',
+      rootOperationId: 'op-doc-empty-description',
+      source: 'createDocument',
+      sourceToolCallId: 'tool-call-doc-empty-description',
+      title: doc.title,
+      topicId,
+    });
+
+    const versions = await workModel.listVersions(work!.id);
+    expect(versions[0].snapshot.document.description).toBe(expectedDescription);
+
+    const byOperation = await workModel.listByRootOperation({
+      rootOperationId: 'op-doc-empty-description',
+    });
+    expect(byOperation[0]).toMatchObject({
+      document: expect.objectContaining({ description: expectedDescription }),
+    });
+
+    const summaries = await workModel.listSummariesByRootOperations({
+      rootOperationIds: ['op-doc-empty-description'],
+    });
+    expect(summaries['op-doc-empty-description']?.[0].document.description).toBe(
+      expectedDescription,
+    );
+
+    const byConversation = await workModel.listByConversation({ topicId });
+    expect(byConversation[0]).toMatchObject({
+      document: expect.objectContaining({ description: expectedDescription }),
+    });
+  });
+
   it('keeps one document work row and appends versions for document edits', async () => {
     const agentDocumentModel = new AgentDocumentModel(serverDB, userId);
     const workModel = new WorkModel(serverDB, userId);

@@ -34,6 +34,7 @@ import type { LobeChatDatabase } from '../type';
 import { buildWorkspaceWhere } from '../utils/workspace';
 
 const MAX_VERSION_CREATE_RETRIES = 5;
+const DOCUMENT_DESCRIPTION_PREFIX_LENGTH = 120;
 const VERSION_CONTEXT_ROLES = ['created', 'updated'] as const;
 
 interface TaskWorkSummaryQueryRow {
@@ -77,6 +78,15 @@ const normalizeTaskLookup = (value?: string) => {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;
   return trimmed.startsWith('task_') ? trimmed : trimmed.toUpperCase();
+};
+
+const getDocumentContentPrefix = (content: string | null) => {
+  const normalized = content?.replaceAll(/\s+/g, ' ').trim();
+  if (!normalized) return null;
+
+  return normalized.length > DOCUMENT_DESCRIPTION_PREFIX_LENGTH
+    ? `${normalized.slice(0, DOCUMENT_DESCRIPTION_PREFIX_LENGTH)}...`
+    : normalized;
 };
 
 export class WorkModel {
@@ -152,14 +162,21 @@ export class WorkModel {
   private documentSnapshot = (
     doc: DocumentItem,
     params: Pick<RegisterDocumentWorkParams, 'description' | 'title' | 'url'>,
-  ): WorkVersionSnapshot => ({
-    document: {
-      description: params.description ?? doc.description ?? null,
-      id: doc.id,
-      title: params.title?.trim() || doc.title,
-      url: params.url ?? null,
-    } satisfies DocumentWorkVersionSnapshot,
-  });
+  ): WorkVersionSnapshot => {
+    const description =
+      params.description?.trim() ||
+      doc.description?.trim() ||
+      getDocumentContentPrefix(doc.content);
+
+    return {
+      document: {
+        description,
+        id: doc.id,
+        title: params.title?.trim() || doc.title,
+        url: params.url ?? null,
+      } satisfies DocumentWorkVersionSnapshot,
+    };
+  };
 
   private resolveTask = async (params: RegisterTaskWorkParams): Promise<TaskItem | null> => {
     const filters: SQL[] = [];

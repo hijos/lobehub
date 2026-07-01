@@ -1058,7 +1058,10 @@ export class AiAgentService {
     // documents stay keyed on `resolvedAgentId`.
     const persistAgentId = appContext?.agentSignal?.agentId ?? resolvedAgentId;
 
-    // Apply per-call model/provider overrides (e.g. from task.config)
+    // Apply per-call model/provider overrides. Sources include task.config and
+    // the callSubAgent spawn site, which resolves the sub-agent's default model
+    // from the parent agent's `agencyConfig.subagent` and passes it explicitly —
+    // so this execution path never has to special-case sub-agents.
     if (modelOverride) agentConfig.model = modelOverride;
     if (providerOverride) agentConfig.provider = providerOverride;
 
@@ -3748,6 +3751,11 @@ export class AiAgentService {
     this.execAgentThreadRun(params, {
       isSubAgent: true,
       logScope: 'execVirtualSubAgent',
+      // Sub-agent model is resolved at the spawn site (callSubAgent runner) from
+      // the parent agent's `agencyConfig.subagent` and threaded through here as an
+      // explicit override, so execAgent never re-reads the parent config.
+      model: params.model,
+      provider: params.provider,
       resumeParentOnComplete: true,
     });
 
@@ -3955,6 +3963,14 @@ export class AiAgentService {
       isSubAgent: boolean;
       logScope: 'execSubAgent' | 'execVirtualSubAgent';
       /**
+       * Explicit model/provider override for the spawned run. The callSubAgent
+       * spawn site resolves the sub-agent model from the parent agent's config
+       * and passes it here; left undefined for group members (they keep their
+       * own model).
+       */
+      model?: string;
+      provider?: string;
+      /**
        * Marks the run's orchestration role on its operation metadata. Isolated
        * group members pass `'member'` so the inactivity-watchdog abandon path can
        * tell them apart from genuine `callSubAgent` children — both share
@@ -4063,8 +4079,11 @@ export class AiAgentService {
       appContext,
       autoStart: true,
       hooks,
+      // Explicit sub-agent model override resolved at the spawn site.
+      model: options.model,
       parentOperationId,
       prompt: instruction,
+      provider: options.provider,
       trigger: inheritedTrigger,
       userInterventionConfig: { approvalMode: 'headless' },
     });

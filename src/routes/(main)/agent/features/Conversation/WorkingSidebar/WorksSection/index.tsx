@@ -10,10 +10,12 @@ import { createStaticStyles } from 'antd-style';
 import {
   ChevronDownIcon,
   ChevronRightIcon,
+  CircleDotIcon,
   ClipboardListIcon,
   FileTextIcon,
   HistoryIcon,
   ListIcon,
+  MessageSquareTextIcon,
 } from 'lucide-react';
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -274,9 +276,56 @@ const DocumentWorkVersionHistoryCard = memo<{ work: Extract<WorkListItem, { type
 
 DocumentWorkVersionHistoryCard.displayName = 'DocumentWorkVersionHistoryCard';
 
+const LinearWorkVersionHistoryCard = memo<{ work: Extract<WorkListItem, { type: 'linear' }> }>(
+  ({ work }) => {
+    const [expanded, setExpanded] = useState(true);
+    const ToggleIcon = expanded ? ChevronDownIcon : ChevronRightIcon;
+    const label = work.resourceIdentifier ?? work.resourceId;
+    const Icon =
+      work.linear.entityType === 'comment'
+        ? MessageSquareTextIcon
+        : work.linear.entityType === 'document'
+          ? FileTextIcon
+          : CircleDotIcon;
+
+    return (
+      <Flexbox className={styles.workCard}>
+        <Flexbox
+          horizontal
+          align={'center'}
+          className={styles.header}
+          gap={8}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          <ToggleIcon size={16} />
+          <Icon className={styles.context} size={16} />
+          <Text className={styles.context} style={{ flexShrink: 0 }}>
+            {label}
+          </Text>
+          <Text
+            ellipsis
+            className={styles.title}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (work.linear.url) window.open(work.linear.url, '_blank', 'noopener,noreferrer');
+            }}
+          >
+            {work.title}
+          </Text>
+        </Flexbox>
+        {expanded && <VersionList workId={work.id} />}
+      </Flexbox>
+    );
+  },
+);
+
+LinearWorkVersionHistoryCard.displayName = 'LinearWorkVersionHistoryCard';
+
 const WorkVersionHistoryCard = memo<{ work: WorkListItem }>(({ work }) =>
   work.type === 'document' ? (
     <DocumentWorkVersionHistoryCard work={work} />
+  ) : work.type === 'linear' ? (
+    <LinearWorkVersionHistoryCard work={work} />
   ) : (
     <TaskWorkVersionHistoryCard work={work} />
   ),

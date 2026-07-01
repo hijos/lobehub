@@ -4,18 +4,30 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BuiltinToolsExecutor } from '../builtin';
 import type { ToolExecutionContext } from '../types';
 
-const mockApiHandler = vi.fn();
+const mocks = vi.hoisted(() => ({
+  apiHandler: vi.fn(),
+  executeLobehubSkill: vi.fn(),
+  handleLinearToolResult: vi.fn(),
+}));
+const mockApiHandler = mocks.apiHandler;
 
 vi.mock('../serverRuntimes', () => ({
   hasServerRuntime: vi.fn().mockReturnValue(true),
-  getServerRuntime: vi.fn(async () => ({ createDocument: mockApiHandler })),
+  getServerRuntime: vi.fn(async () => ({ createDocument: mocks.apiHandler })),
 }));
 
+vi.mock('@/database/models/work', () => ({
+  WorkModel: vi.fn().mockImplementation(() => ({
+    handleLinearToolResult: mocks.handleLinearToolResult,
+  })),
+}));
 vi.mock('@/server/services/composio', () => ({
   ComposioService: vi.fn().mockImplementation(() => ({})),
 }));
 vi.mock('@/server/services/market', () => ({
-  MarketService: vi.fn().mockImplementation(() => ({})),
+  MarketService: vi.fn().mockImplementation(() => ({
+    executeLobehubSkill: mocks.executeLobehubSkill,
+  })),
 }));
 
 // The runtime mock above only exposes `createDocument`, but the manifest is the
@@ -48,6 +60,8 @@ describe('BuiltinToolsExecutor truncated arguments', () => {
 
   beforeEach(() => {
     mockApiHandler.mockReset();
+    mocks.executeLobehubSkill.mockReset();
+    mocks.handleLinearToolResult.mockReset();
   });
 
   it('short-circuits with TRUNCATED_ARGUMENTS when JSON is cut mid-object', async () => {
@@ -177,5 +191,65 @@ describe('BuiltinToolsExecutor truncated arguments', () => {
 
     expect(result.error?.code).toBe('UNKNOWN_API');
     expect(result.content).toContain('barApi');
+  });
+
+  it('registers Linear Work after a successful server-side LobeHub Skill tool call', async () => {
+    mocks.executeLobehubSkill.mockResolvedValueOnce({
+      content: JSON.stringify({
+        id: 'LOBE-10966',
+        status: 'In Progress',
+        title: 'Linear Work issue',
+        url: 'https://linear.app/lobehub/issue/LOBE-10966/linear-work-issue',
+      }),
+      success: true,
+    });
+
+    const result = await executor.execute(
+      {
+        apiName: 'save_issue',
+        arguments: '{"id":"LOBE-10966","state":"In Progress"}',
+        id: 'tool-call-linear',
+        identifier: 'linear',
+        source: 'lobehubSkill',
+        type: 'default' as any,
+      },
+      {
+        ...context,
+        agentId: 'agent-1',
+        operationId: 'op-child',
+        rootOperationId: 'op-root',
+        serverDB: {} as NonNullable<ToolExecutionContext['serverDB']>,
+        threadId: 'thread-1',
+        toolCallId: 'tool-call-linear',
+        toolMessageId: 'msg-tool-linear',
+        topicId: 'topic-1',
+        userId: 'user-1',
+        workspaceId: 'workspace-1',
+      },
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.executeLobehubSkill).toHaveBeenCalledWith({
+      args: { id: 'LOBE-10966', state: 'In Progress' },
+      context: { topicId: 'topic-1' },
+      provider: 'linear',
+      toolName: 'save_issue',
+    });
+    expect(mocks.handleLinearToolResult).toHaveBeenCalledWith({
+      actorAgentId: 'agent-1',
+      args: { id: 'LOBE-10966', state: 'In Progress' },
+      data: {
+        id: 'LOBE-10966',
+        status: 'In Progress',
+        title: 'Linear Work issue',
+        url: 'https://linear.app/lobehub/issue/LOBE-10966/linear-work-issue',
+      },
+      rootOperationId: 'op-root',
+      sourceMessageId: 'msg-tool-linear',
+      sourceToolCallId: 'tool-call-linear',
+      threadId: 'thread-1',
+      toolName: 'save_issue',
+      topicId: 'topic-1',
+    });
   });
 });

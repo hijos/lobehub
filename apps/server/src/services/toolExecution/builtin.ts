@@ -4,6 +4,7 @@ import { type ChatToolPayload } from '@lobechat/types';
 import { detectTruncatedJSON, safeParseJSON } from '@lobechat/utils';
 import debug from 'debug';
 
+import { WorkModel } from '@/database/models/work';
 import { ComposioService } from '@/server/services/composio';
 import { MarketService } from '@/server/services/market';
 
@@ -44,10 +45,14 @@ const collectRuntimeApiNames = (runtime: Record<string, any>): string[] => {
 };
 
 export class BuiltinToolsExecutor implements IToolExecutor {
+  private db: LobeChatDatabase;
+  private userId: string;
   private marketService: MarketService;
   private composioService: ComposioService;
 
   constructor(db: LobeChatDatabase, userId: string) {
+    this.db = db;
+    this.userId = userId;
     this.marketService = new MarketService({ userInfo: { userId } });
     this.composioService = new ComposioService({ db, userId });
   }
@@ -100,7 +105,7 @@ export class BuiltinToolsExecutor implements IToolExecutor {
 
     // Route LobeHub Skills to MarketService
     if (source === 'lobehubSkill') {
-      return this.marketService.executeLobehubSkill({
+      const result = await this.marketService.executeLobehubSkill({
         args,
         context: {
           topicId: context.topicId,
@@ -108,6 +113,31 @@ export class BuiltinToolsExecutor implements IToolExecutor {
         provider: identifier,
         toolName: apiName,
       });
+
+      if (result.success && identifier === 'linear') {
+        try {
+          const workModel = new WorkModel(
+            context.serverDB ?? this.db,
+            context.userId ?? this.userId,
+            context.workspaceId,
+          );
+          await workModel.handleLinearToolResult({
+            actorAgentId: context.agentId ?? null,
+            args,
+            data: safeParseJSON(result.content) ?? result.content,
+            rootOperationId: context.rootOperationId ?? context.operationId,
+            sourceMessageId: context.toolMessageId,
+            sourceToolCallId: context.toolCallId,
+            threadId: context.threadId,
+            toolName: apiName,
+            topicId: context.topicId,
+          });
+        } catch (error) {
+          console.error('Failed to register Linear Work for %s:%s: %O', identifier, apiName, error);
+        }
+      }
+
+      return result;
     }
 
     // Route Composio tools to ComposioService

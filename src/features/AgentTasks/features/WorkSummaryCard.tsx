@@ -3,7 +3,12 @@
 import type { WorkSummaryItem } from '@lobechat/types';
 import { Flexbox, Text } from '@lobehub/ui';
 import { createStaticStyles } from 'antd-style';
-import { ClipboardListIcon, FileTextIcon } from 'lucide-react';
+import {
+  CircleDotIcon,
+  ClipboardListIcon,
+  FileTextIcon,
+  MessageSquareTextIcon,
+} from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -65,13 +70,34 @@ const WorkSummaryCard = memo<WorkSummaryCardProps>(({ className, item }) => {
   const cost = formatWorkVersionCost(item.totalCost);
   const title = item.version?.title || item.title;
   const isDocument = item.type === 'document';
+  const isLinear = item.type === 'linear';
   const description = isDocument
     ? item.document.description?.trim()
-    : item.task.description?.trim();
-  const Icon = isDocument ? FileTextIcon : ClipboardListIcon;
+    : isLinear
+      ? (
+          item.linear.description ||
+          item.linear.body ||
+          item.linear.content ||
+          item.linear.status
+        )?.trim()
+      : item.task.description?.trim();
+  const Icon = isDocument
+    ? FileTextIcon
+    : isLinear
+      ? item.linear.entityType === 'comment'
+        ? MessageSquareTextIcon
+        : item.linear.entityType === 'document'
+          ? FileTextIcon
+          : CircleDotIcon
+      : ClipboardListIcon;
   const handleOpen = () => {
     if (isDocument) {
       openDocument(item.document.id, item.context.metadata?.agentDocumentId);
+      return;
+    }
+
+    if (isLinear) {
+      if (item.linear.url) window.open(item.linear.url, '_blank', 'noopener,noreferrer');
       return;
     }
 

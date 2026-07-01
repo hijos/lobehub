@@ -1,10 +1,17 @@
 import type {
   DeleteDocumentWorkParams,
+  DeleteLinearWorkParams,
   DocumentWorkContextVersionItem,
   DocumentWorkListItem,
   DocumentWorkSummaryItem,
   DocumentWorkVersionSnapshot,
+  LinearWorkContextVersionItem,
+  LinearWorkListItem,
+  LinearWorkSummaryItem,
+  LinearWorkVersionSnapshot,
   RegisterDocumentWorkParams,
+  RegisterLinearToolResultWorkParams,
+  RegisterLinearWorkParams,
   RegisterTaskWorkParams,
   TaskItem,
   TaskWorkContextVersionItem,
@@ -32,6 +39,7 @@ import { tasks } from '../schemas/task';
 import { workContexts, works, workVersions } from '../schemas/work';
 import type { LobeChatDatabase } from '../type';
 import { buildWorkspaceWhere } from '../utils/workspace';
+import { normalizeLinearToolResult } from './work/linearToolResult';
 
 const MAX_VERSION_CREATE_RETRIES = 5;
 const DOCUMENT_DESCRIPTION_PREFIX_LENGTH = 120;
@@ -50,6 +58,13 @@ interface DocumentWorkSummaryQueryRow {
   context: typeof workContexts.$inferSelect;
   document: DocumentWorkVersionSnapshot;
   version: DocumentWorkSummaryItem['version'];
+  work: WorkItem;
+}
+
+interface LinearWorkSummaryQueryRow {
+  context: typeof workContexts.$inferSelect;
+  linear: LinearWorkVersionSnapshot;
+  version: LinearWorkSummaryItem['version'];
   work: WorkItem;
 }
 
@@ -178,6 +193,47 @@ export class WorkModel {
     };
   };
 
+  private linearSnapshot = (params: RegisterLinearWorkParams): WorkVersionSnapshot => ({
+    linear: {
+      assignee: params.assignee ?? null,
+      assigneeId: params.assigneeId ?? null,
+      body: params.body ?? null,
+      color: params.color ?? null,
+      content: params.content ?? null,
+      createdAt: params.createdAt ?? null,
+      description: params.description ?? null,
+      dueDate: params.dueDate ?? null,
+      entityType:
+        params.resourceType === 'linear_issue'
+          ? 'issue'
+          : params.resourceType === 'linear_document'
+            ? 'document'
+            : 'comment',
+      id: params.resourceId,
+      icon: params.icon ?? null,
+      identifier: params.resourceIdentifier ?? null,
+      issueId: params.issueId ?? null,
+      issueIdentifier: params.issueIdentifier ?? null,
+      labels: params.labels ?? [],
+      parentId: params.parentId ?? null,
+      priority: params.priority ?? null,
+      priorityValue: params.priorityValue ?? null,
+      project: params.project ?? null,
+      projectId: params.projectId ?? null,
+      slugId: params.slugId ?? null,
+      status: params.status ?? null,
+      statusType: params.statusType ?? null,
+      targetId: params.targetId ?? null,
+      targetIdentifier: params.targetIdentifier ?? null,
+      targetType: params.targetType ?? null,
+      team: params.team ?? null,
+      teamId: params.teamId ?? null,
+      title: params.title ?? null,
+      updatedAt: params.updatedAt ?? null,
+      url: params.url ?? null,
+    } satisfies LinearWorkVersionSnapshot,
+  });
+
   private resolveTask = async (params: RegisterTaskWorkParams): Promise<TaskItem | null> => {
     const filters: SQL[] = [];
     const taskId = normalizeTaskLookup(params.taskId);
@@ -242,6 +298,11 @@ export class WorkModel {
 
   private documentTitle = (doc: DocumentItem, title?: string | null) =>
     title?.trim() || doc.title?.trim() || doc.filename?.trim() || doc.id;
+
+  private linearTitle = (params: RegisterLinearWorkParams) =>
+    params.title?.trim() ||
+    params.resourceIdentifier?.trim() ||
+    `${params.resourceType.replace('linear_', 'Linear ')} ${params.resourceId}`;
 
   private upsertTaskWork = async (task: TaskItem, title: string): Promise<WorkItem> => {
     const values = {
@@ -308,6 +369,46 @@ export class WorkModel {
         ...conflict,
         set: {
           resourceIdentifier: doc.filename,
+          title,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+
+    return work;
+  };
+
+  private upsertLinearWork = async (
+    params: RegisterLinearWorkParams,
+    title: string,
+  ): Promise<WorkItem> => {
+    const values = {
+      resourceId: params.resourceId,
+      resourceIdentifier: params.resourceIdentifier ?? null,
+      resourceType: params.resourceType,
+      title,
+      type: 'linear' as const,
+      userId: this.userId,
+      workspaceId: this.workspaceId ?? null,
+    };
+
+    const conflict = this.workspaceId
+      ? {
+          target: [works.workspaceId, works.resourceType, works.resourceId],
+          targetWhere: isNotNull(works.workspaceId),
+        }
+      : {
+          target: [works.resourceType, works.resourceId, works.userId],
+          targetWhere: isNull(works.workspaceId),
+        };
+
+    const [work] = await this.db
+      .insert(works)
+      .values(values)
+      .onConflictDoUpdate({
+        ...conflict,
+        set: {
+          resourceIdentifier: sql`COALESCE(${params.resourceIdentifier ?? null}, ${works.resourceIdentifier})`,
           title,
           updatedAt: new Date(),
         },
@@ -493,6 +594,76 @@ export class WorkModel {
     throw new Error('Failed to create document work version after max retries');
   };
 
+  private createLinearVersion = async (
+    work: WorkItem,
+    params: RegisterLinearWorkParams,
+  ): Promise<WorkVersionItem> => {
+    const existing = await this.findVersionBySourceToolCall(work.id, params.sourceToolCallId);
+    if (existing) return existing;
+
+    const title = this.linearTitle(params);
+    const snapshot = this.linearSnapshot(params);
+
+    for (let attempt = 0; attempt < MAX_VERSION_CREATE_RETRIES; attempt += 1) {
+      try {
+        return await this.db.transaction(async (tx) => {
+          const now = new Date();
+          const [next] = await tx
+            .select({
+              version: sql<number>`COALESCE(MAX(${workVersions.version}), 0) + 1`,
+            })
+            .from(workVersions)
+            .where(eq(workVersions.workId, work.id));
+
+          const [version] = await tx
+            .insert(workVersions)
+            .values({
+              contentRefType: 'inline_snapshot',
+              renderType: 'linear_snapshot',
+              snapshot,
+              title,
+              version: Number(next.version),
+              workId: work.id,
+            })
+            .returning();
+
+          await tx.insert(workContexts).values({
+            actorAgentId: params.actorAgentId ?? null,
+            role: params.role,
+            rootOperationId: params.rootOperationId ?? null,
+            source: params.source,
+            sourceMessageId: params.sourceMessageId ?? null,
+            sourceToolCallId: params.sourceToolCallId ?? null,
+            sourceType: params.sourceType ?? 'tool',
+            threadId: params.threadId ?? null,
+            topicId: params.topicId ?? null,
+            userId: this.userId,
+            versionId: version.id,
+            workId: work.id,
+            workspaceId: this.workspaceId ?? null,
+          });
+
+          await tx
+            .update(works)
+            .set({ currentVersionId: version.id, title, updatedAt: now })
+            .where(and(eq(works.id, work.id), this.ownership()));
+
+          return version;
+        });
+      } catch (error) {
+        if (!isUniqueViolation(error) || attempt === MAX_VERSION_CREATE_RETRIES - 1) throw error;
+
+        const existingAfterConflict = await this.findVersionBySourceToolCall(
+          work.id,
+          params.sourceToolCallId,
+        );
+        if (existingAfterConflict) return existingAfterConflict;
+      }
+    }
+
+    throw new Error('Failed to create linear work version after max retries');
+  };
+
   registerTask = async (params: RegisterTaskWorkParams): Promise<WorkItem | null> => {
     const task = await this.resolveTask(params);
     if (!task) return null;
@@ -515,6 +686,28 @@ export class WorkModel {
     return this.findById(work.id);
   };
 
+  registerLinear = async (params: RegisterLinearWorkParams): Promise<WorkItem | null> => {
+    const title = this.linearTitle(params);
+    const work = await this.upsertLinearWork(params, title);
+    await this.createLinearVersion(work, params);
+
+    return this.findById(work.id);
+  };
+
+  handleLinearToolResult = async (
+    params: RegisterLinearToolResultWorkParams,
+  ): Promise<WorkItem | null> => {
+    const operation = normalizeLinearToolResult(params);
+    if (!operation) return null;
+
+    if (operation.type === 'delete') {
+      await this.deleteLinearWork(operation.params);
+      return null;
+    }
+
+    return this.registerLinear(operation.params);
+  };
+
   deleteDocumentWork = async (params: DeleteDocumentWorkParams): Promise<void> => {
     const [doc] = await this.db
       .select({ id: documents.id })
@@ -527,6 +720,18 @@ export class WorkModel {
       .delete(works)
       .where(
         and(this.ownership(), eq(works.resourceType, 'document'), eq(works.resourceId, doc.id)),
+      );
+  };
+
+  deleteLinearWork = async (params: DeleteLinearWorkParams): Promise<void> => {
+    await this.db
+      .delete(works)
+      .where(
+        and(
+          this.ownership(),
+          eq(works.resourceType, params.resourceType),
+          eq(works.resourceId, params.resourceId),
+        ),
       );
   };
 
@@ -672,6 +877,47 @@ export class WorkModel {
     }));
   };
 
+  private listLinearContextVersions = async (
+    filters: SQL[],
+    limit = 20,
+  ): Promise<LinearWorkContextVersionItem[]> => {
+    const rows = await this.db
+      .select({
+        context: workContexts,
+        linear: sql<LinearWorkVersionSnapshot>`${workVersions.snapshot}->'linear'`,
+        version: {
+          createdAt: workVersions.createdAt,
+          cumulativeCost: workVersions.cumulativeCost,
+          id: workVersions.id,
+          title: workVersions.title,
+          version: workVersions.version,
+        },
+        work: works,
+      })
+      .from(workContexts)
+      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
+      .innerJoin(workVersions, eq(workContexts.versionId, workVersions.id))
+      .where(
+        and(
+          this.contextOwnership(),
+          ...filters,
+          inArray(workContexts.role, VERSION_CONTEXT_ROLES),
+          eq(works.type, 'linear'),
+        ),
+      )
+      .orderBy(desc(workContexts.createdAt))
+      .limit(limit);
+
+    return rows.map((row) => ({
+      ...row.work,
+      context: this.toWorkContext(row.context),
+      linear: row.linear,
+      resourceType: row.work.resourceType as LinearWorkListItem['resourceType'],
+      type: 'linear' as const,
+      version: row.version,
+    }));
+  };
+
   listByRootOperation = async (params: {
     limit?: number;
     rootOperationId?: string | null;
@@ -700,11 +946,12 @@ export class WorkModel {
     const entries = await Promise.all(
       rootOperationIds.map(async (rootOperationId) => {
         const filters = [eq(workContexts.rootOperationId, rootOperationId)];
-        const [taskItems, documentItems] = await Promise.all([
+        const [taskItems, documentItems, linearItems] = await Promise.all([
           this.listTaskContextVersions(filters, limit),
           this.listDocumentContextVersions(filters, limit),
+          this.listLinearContextVersions(filters, limit),
         ]);
-        const items = [...taskItems, ...documentItems]
+        const items = [...taskItems, ...documentItems, ...linearItems]
           .sort((a, b) => b.context.createdAt.getTime() - a.context.createdAt.getTime())
           .slice(0, limit);
 
@@ -827,6 +1074,36 @@ export class WorkModel {
       .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
       .limit(rowLimit);
 
+  private listLinearWorkSummaryRows = async (
+    filters: SQL[],
+    rowLimit: number,
+  ): Promise<LinearWorkSummaryQueryRow[]> =>
+    this.db
+      .select({
+        context: workContexts,
+        linear: sql<LinearWorkVersionSnapshot>`${workVersions.snapshot}->'linear'`,
+        version: {
+          createdAt: workVersions.createdAt,
+          id: workVersions.id,
+          title: workVersions.title,
+          version: workVersions.version,
+        },
+        work: works,
+      })
+      .from(workContexts)
+      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
+      .innerJoin(workVersions, eq(works.currentVersionId, workVersions.id))
+      .where(
+        and(
+          this.contextOwnership(),
+          ...filters,
+          inArray(workContexts.role, VERSION_CONTEXT_ROLES),
+          eq(works.type, 'linear'),
+        ),
+      )
+      .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
+      .limit(rowLimit);
+
   private toDocumentWorkSummaries = async (
     rows: DocumentWorkSummaryQueryRow[],
   ): Promise<DocumentWorkSummaryItem[]> => {
@@ -839,6 +1116,22 @@ export class WorkModel {
       resourceType: 'document' as const,
       totalCost: costByWorkId.get(row.work.id) ?? null,
       type: 'document' as const,
+      version: row.version,
+    }));
+  };
+
+  private toLinearWorkSummaries = async (
+    rows: LinearWorkSummaryQueryRow[],
+  ): Promise<LinearWorkSummaryItem[]> => {
+    const costByWorkId = await this.getTotalCostByWorkIds(rows.map((row) => row.work.id));
+
+    return rows.map((row) => ({
+      ...row.work,
+      context: this.toWorkContext(row.context),
+      linear: row.linear,
+      resourceType: row.work.resourceType as LinearWorkSummaryItem['resourceType'],
+      totalCost: costByWorkId.get(row.work.id) ?? null,
+      type: 'linear' as const,
       version: row.version,
     }));
   };
@@ -872,14 +1165,16 @@ export class WorkModel {
     const limit = params.limit ?? 20;
     const filters = [inArray(workContexts.rootOperationId, rootOperationIds)];
     const rowLimit = rootOperationIds.length * limit * 4;
-    const [taskRows, documentRows] = await Promise.all([
+    const [taskRows, documentRows, linearRows] = await Promise.all([
       this.listTaskWorkSummaryRows(filters, rowLimit),
       this.listDocumentWorkSummaryRows(filters, rowLimit),
+      this.listLinearWorkSummaryRows(filters, rowLimit),
     ]);
     const summaries = this.latestSummaryItemsByWork(
       [
         ...(await this.toTaskWorkSummaries(taskRows)),
         ...(await this.toDocumentWorkSummaries(documentRows)),
+        ...(await this.toLinearWorkSummaries(linearRows)),
       ].sort((a, b) => b.context.createdAt.getTime() - a.context.createdAt.getTime()),
     );
 
@@ -905,15 +1200,17 @@ export class WorkModel {
       ? eq(workContexts.threadId, params.threadId)
       : isNull(workContexts.threadId);
     const filters = [eq(workContexts.topicId, params.topicId), threadFilter];
-    const [taskRows, documentRows] = await Promise.all([
+    const [taskRows, documentRows, linearRows] = await Promise.all([
       this.listTaskWorkSummaryRows(filters, limit * 4),
       this.listDocumentWorkSummaryRows(filters, limit * 4),
+      this.listLinearWorkSummaryRows(filters, limit * 4),
     ]);
 
     return this.latestSummaryItemsByWork(
       [
         ...(await this.toTaskWorkSummaries(taskRows)),
         ...(await this.toDocumentWorkSummaries(documentRows)),
+        ...(await this.toLinearWorkSummaries(linearRows)),
       ].sort((a, b) => b.context.createdAt.getTime() - a.context.createdAt.getTime()),
       limit,
     );
@@ -976,6 +1273,26 @@ export class WorkModel {
       .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
       .limit(limit * 4);
 
+    const linearRows = await this.db
+      .select({
+        contextCreatedAt: workContexts.createdAt,
+        linear: sql<LinearWorkVersionSnapshot>`${workVersions.snapshot}->'linear'`,
+        work: works,
+      })
+      .from(workContexts)
+      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
+      .innerJoin(workVersions, eq(works.currentVersionId, workVersions.id))
+      .where(
+        and(
+          this.contextOwnership(),
+          eq(workContexts.topicId, params.topicId),
+          threadFilter,
+          eq(works.type, 'linear'),
+        ),
+      )
+      .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
+      .limit(limit * 4);
+
     const seen = new Set<string>();
     const items: WorkListItem[] = [];
     const rows = [
@@ -1000,6 +1317,15 @@ export class WorkModel {
           resourceType: 'document' as const,
           type: 'document' as const,
         } satisfies DocumentWorkListItem,
+      })),
+      ...linearRows.map((row) => ({
+        contextCreatedAt: row.contextCreatedAt,
+        item: {
+          ...row.work,
+          linear: row.linear,
+          resourceType: row.work.resourceType as LinearWorkListItem['resourceType'],
+          type: 'linear' as const,
+        } satisfies LinearWorkListItem,
       })),
     ].sort((a, b) => b.contextCreatedAt.getTime() - a.contextCreatedAt.getTime());
 

@@ -1,10 +1,11 @@
 import type { TaskAutomationMode, TaskStatus } from './task';
 
-export type WorkType = 'document' | 'task';
+export type WorkType = 'document' | 'linear' | 'task';
 export type WorkStatus = 'archived' | 'draft' | 'published';
 export type WorkVisibility = 'private' | 'public' | 'workspace';
-export type WorkResourceType = 'document' | 'task';
-export type WorkRenderType = 'document_snapshot' | 'task_snapshot';
+export type LinearWorkResourceType = 'linear_comment' | 'linear_document' | 'linear_issue';
+export type WorkResourceType = 'document' | LinearWorkResourceType | 'task';
+export type WorkRenderType = 'document_snapshot' | 'linear_snapshot' | 'task_snapshot';
 export type WorkContentRefType = 'file' | 'inline_snapshot' | 'storage' | 'url';
 export type WorkContextRole =
   | 'created'
@@ -48,9 +49,48 @@ export interface DocumentWorkVersionSnapshot {
   url: string | null;
 }
 
+export type LinearWorkEntityType = 'comment' | 'document' | 'issue';
+
+export interface LinearWorkVersionSnapshot {
+  assignee: string | null;
+  assigneeId: string | null;
+  body: string | null;
+  color: string | null;
+  content: string | null;
+  createdAt: string | null;
+  description: string | null;
+  dueDate: string | null;
+  entityType: LinearWorkEntityType;
+  icon: string | null;
+  id: string;
+  identifier: string | null;
+  issueId: string | null;
+  issueIdentifier: string | null;
+  labels: string[];
+  parentId: string | null;
+  priority: string | null;
+  priorityValue: number | null;
+  project: string | null;
+  projectId: string | null;
+  slugId: string | null;
+  status: string | null;
+  statusType: string | null;
+  targetId: string | null;
+  targetIdentifier: string | null;
+  targetType: LinearWorkEntityType | 'initiative' | 'milestone' | 'project' | null;
+  team: string | null;
+  teamId: string | null;
+  title: string | null;
+  updatedAt: string | null;
+  url: string | null;
+}
+
 export type WorkVersionSnapshot =
   | {
       document: DocumentWorkVersionSnapshot;
+    }
+  | {
+      linear: LinearWorkVersionSnapshot;
     }
   | {
       task: TaskWorkVersionSnapshot;
@@ -137,7 +177,13 @@ export interface DocumentWorkListItem extends WorkItem {
   type: 'document';
 }
 
-export type WorkListItem = DocumentWorkListItem | TaskWorkListItem;
+export interface LinearWorkListItem extends WorkItem {
+  linear: LinearWorkVersionSnapshot;
+  resourceType: LinearWorkResourceType;
+  type: 'linear';
+}
+
+export type WorkListItem = DocumentWorkListItem | LinearWorkListItem | TaskWorkListItem;
 
 export type WorkContextPreview = Pick<
   WorkContextItem,
@@ -162,7 +208,15 @@ export interface DocumentWorkContextVersionItem extends DocumentWorkListItem {
   version: Pick<WorkVersionItem, 'createdAt' | 'cumulativeCost' | 'id' | 'title' | 'version'>;
 }
 
-export type WorkContextVersionItem = DocumentWorkContextVersionItem | TaskWorkContextVersionItem;
+export interface LinearWorkContextVersionItem extends LinearWorkListItem {
+  context: WorkContextPreview;
+  version: Pick<WorkVersionItem, 'createdAt' | 'cumulativeCost' | 'id' | 'title' | 'version'>;
+}
+
+export type WorkContextVersionItem =
+  | DocumentWorkContextVersionItem
+  | LinearWorkContextVersionItem
+  | TaskWorkContextVersionItem;
 export type TaskWorkContextVersionMap = Record<string, TaskWorkContextVersionItem[]>;
 export type WorkContextVersionMap = Record<string, WorkContextVersionItem[]>;
 
@@ -178,7 +232,13 @@ export interface DocumentWorkSummaryItem extends DocumentWorkListItem {
   version: Pick<WorkVersionItem, 'createdAt' | 'id' | 'title' | 'version'> | null;
 }
 
-export type WorkSummaryItem = DocumentWorkSummaryItem | TaskWorkSummaryItem;
+export interface LinearWorkSummaryItem extends LinearWorkListItem {
+  context: WorkContextPreview;
+  totalCost: number | null;
+  version: Pick<WorkVersionItem, 'createdAt' | 'id' | 'title' | 'version'> | null;
+}
+
+export type WorkSummaryItem = DocumentWorkSummaryItem | LinearWorkSummaryItem | TaskWorkSummaryItem;
 export type TaskWorkSummaryMap = Record<string, TaskWorkSummaryItem[]>;
 export type WorkSummaryMap = Record<string, WorkSummaryItem[]>;
 
@@ -211,6 +271,66 @@ export interface DeleteDocumentWorkParams {
   agentDocumentId?: string | null;
   agentId?: string | null;
   documentId: string;
+}
+
+export interface RegisterLinearWorkParams {
+  actorAgentId?: string | null;
+  assignee?: string | null;
+  assigneeId?: string | null;
+  body?: string | null;
+  color?: string | null;
+  content?: string | null;
+  createdAt?: string | null;
+  description?: string | null;
+  dueDate?: string | null;
+  icon?: string | null;
+  issueId?: string | null;
+  issueIdentifier?: string | null;
+  labels?: string[];
+  parentId?: string | null;
+  priority?: string | null;
+  priorityValue?: number | null;
+  project?: string | null;
+  projectId?: string | null;
+  resourceId: string;
+  resourceIdentifier?: string | null;
+  resourceType: LinearWorkResourceType;
+  role: Extract<WorkContextRole, 'created' | 'updated'>;
+  rootOperationId?: string | null;
+  slugId?: string | null;
+  source: string;
+  sourceMessageId?: string | null;
+  sourceToolCallId?: string | null;
+  sourceType?: WorkSourceType;
+  status?: string | null;
+  statusType?: string | null;
+  targetId?: string | null;
+  targetIdentifier?: string | null;
+  targetType?: LinearWorkEntityType | 'initiative' | 'milestone' | 'project' | null;
+  team?: string | null;
+  teamId?: string | null;
+  threadId?: string | null;
+  title?: string | null;
+  topicId?: string | null;
+  updatedAt?: string | null;
+  url?: string | null;
+}
+
+export interface DeleteLinearWorkParams {
+  resourceId: string;
+  resourceType: LinearWorkResourceType;
+}
+
+export interface RegisterLinearToolResultWorkParams {
+  actorAgentId?: string | null;
+  args?: Record<string, unknown>;
+  data?: unknown;
+  rootOperationId?: string | null;
+  sourceMessageId?: string | null;
+  sourceToolCallId?: string | null;
+  threadId?: string | null;
+  toolName: string;
+  topicId?: string | null;
 }
 
 export interface RegisterTaskWorkParams {

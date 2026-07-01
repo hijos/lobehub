@@ -1,4 +1,5 @@
 import type {
+  RegisterLinearToolResultWorkParams,
   RegisterTaskWorkParams,
   UpdateWorkVersionCumulativeUsageParams,
   WorkContextVersionItem,
@@ -47,6 +48,18 @@ class WorkService {
 
   registerTask = async (params: RegisterTaskWorkParams): Promise<WorkItem | null> =>
     lambdaClient.work.registerTask.mutate(params);
+
+  handleLinearToolResult = async (
+    params: RegisterLinearToolResultWorkParams,
+  ): Promise<WorkItem | null> => {
+    const work = await lambdaClient.work.handleLinearToolResult.mutate(params);
+    await Promise.all([
+      this.refreshConversation(params.topicId, params.threadId),
+      this.refreshRootOperation(params.rootOperationId),
+    ]);
+
+    return work;
+  };
 
   updateVersionCumulativeUsage = async (
     params: UpdateWorkVersionCumulativeUsageParams,

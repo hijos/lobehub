@@ -1,4 +1,5 @@
 import { type MCPToolCallResult } from '@/libs/mcp';
+import { workService } from '@/services/work';
 import { useToolStore } from '@/store/tool';
 import { type ChatToolPayload } from '@/types/message';
 import { safeParseJSON } from '@/utils/safeParseJSON';
@@ -7,6 +8,16 @@ import { safeParseJSON } from '@/utils/safeParseJSON';
  * Context for remote tool execution, derived from the invoking message
  */
 export interface RemoteToolExecutorContext {
+  /** Agent ID that triggered this tool call */
+  agentId?: string | null;
+  /** Root operation ID for Work aggregation */
+  rootOperationId?: string;
+  /** Tool result message ID */
+  sourceMessageId?: string;
+  /** Stable tool call ID */
+  sourceToolCallId?: string;
+  /** Thread ID from the message that triggered this tool call */
+  threadId?: string | null;
   /** Topic ID from the message that triggered this tool call */
   topicId?: string;
 }
@@ -88,6 +99,24 @@ export const lobehubSkillExecutor: RemoteToolExecutor = async (p, context) => {
     return createFailedResult(
       result.error || `LobeHub Skill tool ${provider} ${p.apiName} execution failed`,
     );
+  }
+
+  if (provider === 'linear') {
+    try {
+      await workService.handleLinearToolResult({
+        actorAgentId: context?.agentId,
+        args,
+        data: result.data,
+        rootOperationId: context?.rootOperationId,
+        sourceMessageId: context?.sourceMessageId,
+        sourceToolCallId: context?.sourceToolCallId,
+        threadId: context?.threadId,
+        toolName: p.apiName,
+        topicId: context?.topicId,
+      });
+    } catch (error) {
+      console.error('[LobehubSkill] Failed to register Linear Work:', error);
+    }
   }
 
   // Convert to MCPToolCallResult format

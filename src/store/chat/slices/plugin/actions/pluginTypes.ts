@@ -407,6 +407,21 @@ export class PluginTypesActionImpl {
     const operationId = this.#get().messageOperationMap[id];
     const operation = operationId ? this.#get().operations[operationId] : undefined;
     const abortController = operation?.abortController;
+    let rootRuntimeOperationId: string | undefined;
+    let rootRuntimeOperationContext = operation?.context;
+    if (operationId) {
+      let currentOp = operation;
+      while (currentOp) {
+        if (AI_RUNTIME_OPERATION_TYPES.includes(currentOp.type)) {
+          rootRuntimeOperationId = currentOp.id;
+          rootRuntimeOperationContext = currentOp.context;
+          break;
+        }
+
+        const parentId = currentOp.parentOperationId;
+        currentOp = parentId ? this.#get().operations[parentId] : undefined;
+      }
+    }
 
     log(
       '[%s] messageId=%s, tool=%s, operationId=%s, aborted=%s',
@@ -420,7 +435,18 @@ export class PluginTypesActionImpl {
     try {
       // Pass topicId from message context, not global active state
       // This ensures tool calls use the correct topic even if user switches topics
-      data = await executor(payload, { topicId: message?.topicId });
+      data = await executor(payload, {
+        agentId:
+          operation?.context?.agentId ?? rootRuntimeOperationContext?.agentId ?? message?.agentId,
+        rootOperationId: rootRuntimeOperationId ?? operationId,
+        sourceMessageId: id,
+        sourceToolCallId: payload.id,
+        threadId:
+          operation?.context?.threadId ??
+          rootRuntimeOperationContext?.threadId ??
+          message?.threadId,
+        topicId: message?.topicId,
+      });
     } catch (error) {
       console.error(`[${logPrefix}] Error:`, error);
 

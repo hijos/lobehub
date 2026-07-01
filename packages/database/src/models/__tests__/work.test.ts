@@ -2,6 +2,8 @@
 import type {
   DocumentWorkSummaryItem,
   DocumentWorkVersionSnapshot,
+  LinearWorkSummaryItem,
+  LinearWorkVersionSnapshot,
   TaskWorkSummaryItem,
   TaskWorkVersionSnapshot,
   WorkSummaryItem,
@@ -56,6 +58,16 @@ const expectDocumentSnapshot = (snapshot: WorkVersionSnapshot): DocumentWorkVers
   return snapshot.document;
 };
 
+const expectLinearSnapshot = (snapshot: WorkVersionSnapshot): LinearWorkVersionSnapshot => {
+  expect(snapshot).toHaveProperty('linear');
+
+  if (!('linear' in snapshot)) {
+    throw new Error('Expected linear work snapshot');
+  }
+
+  return snapshot.linear;
+};
+
 const expectTaskSummaryItem = (item?: WorkSummaryItem): TaskWorkSummaryItem => {
   expect(item).toBeDefined();
 
@@ -71,6 +83,16 @@ const expectDocumentSummaryItem = (item?: WorkSummaryItem): DocumentWorkSummaryI
 
   if (!item || item.type !== 'document') {
     throw new Error('Expected document work summary');
+  }
+
+  return item;
+};
+
+const expectLinearSummaryItem = (item?: WorkSummaryItem): LinearWorkSummaryItem => {
+  expect(item).toBeDefined();
+
+  if (!item || item.type !== 'linear') {
+    throw new Error('Expected linear work summary');
   }
 
   return item;
@@ -671,6 +693,267 @@ describe('WorkModel', () => {
     expect(work).toBeNull();
     const workRows = await serverDB.select().from(works);
     expect(workRows).toHaveLength(0);
+  });
+
+  it('registers Linear issue creates and appends versions for edits', async () => {
+    const workModel = new WorkModel(serverDB, userId);
+
+    const first = await workModel.handleLinearToolResult({
+      args: { team: 'Engineering', title: 'Linear Work issue' },
+      data: {
+        description: 'Track Linear issue as Work',
+        id: 'LOBE-10966',
+        labels: ['claude code'],
+        priority: { name: 'High', value: 2 },
+        state: { name: 'Backlog' },
+        statusType: 'backlog',
+        team: 'Engineering',
+        teamId: 'team-1',
+        title: 'Linear Work issue',
+        url: 'https://linear.app/lobehub/issue/LOBE-10966/linear-work-issue',
+      },
+      rootOperationId: 'op-linear-issue-create',
+      sourceToolCallId: 'tool-call-linear-issue-create',
+      toolName: 'save_issue',
+      topicId,
+    });
+
+    const second = await workModel.handleLinearToolResult({
+      args: { id: 'LOBE-10966', state: 'In Progress' },
+      data: {
+        description: 'Updated Linear issue as Work',
+        id: 'LOBE-10966',
+        state: 'In Progress',
+        statusType: 'started',
+        title: 'Linear Work issue updated',
+        updatedAt: '2026-07-01T13:23:10.614Z',
+        url: 'https://linear.app/lobehub/issue/LOBE-10966/linear-work-issue',
+      },
+      rootOperationId: 'op-linear-issue-edit',
+      sourceToolCallId: 'tool-call-linear-issue-edit',
+      toolName: 'save_issue',
+      topicId,
+    });
+    const replay = await workModel.handleLinearToolResult({
+      args: { id: 'LOBE-10966', state: 'In Progress' },
+      data: {
+        id: 'LOBE-10966',
+        state: 'In Progress',
+        title: 'Linear Work issue updated',
+      },
+      rootOperationId: 'op-linear-issue-edit',
+      sourceToolCallId: 'tool-call-linear-issue-edit',
+      toolName: 'save_issue',
+      topicId,
+    });
+
+    expect(second?.id).toBe(first?.id);
+    expect(replay?.id).toBe(first?.id);
+    expect(second).toMatchObject({
+      resourceId: 'LOBE-10966',
+      resourceIdentifier: 'LOBE-10966',
+      resourceType: 'linear_issue',
+      title: 'Linear Work issue updated',
+      type: 'linear',
+    });
+
+    const versions = await workModel.listVersions(first!.id);
+    expect(versions.map((item) => item.version)).toEqual([2, 1]);
+    expect(versions[0].context?.role).toBe('updated');
+    expect(expectLinearSnapshot(versions[0].snapshot)).toMatchObject({
+      description: 'Updated Linear issue as Work',
+      entityType: 'issue',
+      id: 'LOBE-10966',
+      identifier: 'LOBE-10966',
+      status: 'In Progress',
+      statusType: 'started',
+      title: 'Linear Work issue updated',
+      updatedAt: '2026-07-01T13:23:10.614Z',
+    });
+    expect(expectLinearSnapshot(versions[0].snapshot)).not.toHaveProperty('raw');
+    expect(expectLinearSnapshot(versions[1].snapshot).status).toBe('Backlog');
+    expect(expectLinearSnapshot(versions[1].snapshot)).toMatchObject({
+      labels: ['claude code'],
+      priority: 'High',
+      priorityValue: 2,
+      team: 'Engineering',
+      teamId: 'team-1',
+    });
+
+    const byOperation = await workModel.listSummariesByRootOperations({
+      rootOperationIds: ['op-linear-issue-create', 'op-linear-issue-edit'],
+    });
+    expect(byOperation['op-linear-issue-create']).toEqual([]);
+    const issueSummary = expectLinearSummaryItem(byOperation['op-linear-issue-edit']?.[0]);
+    expect(issueSummary.linear).toMatchObject({
+      entityType: 'issue',
+      identifier: 'LOBE-10966',
+      status: 'In Progress',
+    });
+
+    const byConversation = await workModel.listByConversation({ topicId });
+    expect(byConversation).toHaveLength(1);
+    expect(byConversation[0]).toMatchObject({
+      linear: expect.objectContaining({ entityType: 'issue' }),
+      resourceType: 'linear_issue',
+      type: 'linear',
+    });
+
+    await workModel.handleLinearToolResult({
+      data: { id: 'issue-uuid-read', title: 'Read only' },
+      sourceToolCallId: 'tool-call-linear-read',
+      toolName: 'get_issue',
+      topicId,
+    });
+    await workModel.handleLinearToolResult({
+      data: { error: 'Invalid issue', isError: true },
+      sourceToolCallId: 'tool-call-linear-error',
+      toolName: 'save_issue',
+      topicId,
+    });
+
+    const workRows = await serverDB
+      .select()
+      .from(works)
+      .where(eq(works.resourceType, 'linear_issue'));
+    expect(workRows).toHaveLength(1);
+  });
+
+  it('registers Linear documents and comments and deletes comment work', async () => {
+    const workModel = new WorkModel(serverDB, userId);
+
+    const document = await workModel.handleLinearToolResult({
+      args: { title: 'Linear document', team: 'Engineering' },
+      data: JSON.stringify({
+        document: {
+          content: 'Document body',
+          id: 'doc-1',
+          slug: 'linear-document',
+          title: 'Linear document',
+          url: 'https://linear.app/lobehub/document/linear-document',
+        },
+      }),
+      rootOperationId: 'op-linear-document-create',
+      sourceToolCallId: 'tool-call-linear-document-create',
+      toolName: 'create_document',
+      topicId,
+    });
+    const editedDocument = await workModel.handleLinearToolResult({
+      args: { content: 'Updated body', id: 'doc-1' },
+      data: {
+        content: 'Updated body',
+        id: 'doc-1',
+        slugId: '8298fa69b2e3',
+        title: 'Linear document updated',
+        url: 'https://linear.app/lobehub/document/linear-document-8298fa69b2e3',
+      },
+      rootOperationId: 'op-linear-document-edit',
+      sourceToolCallId: 'tool-call-linear-document-edit',
+      toolName: 'save_document',
+      topicId,
+    });
+
+    const comment = await workModel.handleLinearToolResult({
+      args: { body: 'Looks good', issueId: 'LOBE-10966' },
+      data: {
+        body: 'Looks good',
+        id: 'comment-1',
+        url: 'https://linear.app/lobehub/issue/LOBE-10966#comment-1',
+      },
+      rootOperationId: 'op-linear-comment-create',
+      sourceToolCallId: 'tool-call-linear-comment-create',
+      toolName: 'save_comment',
+      topicId,
+    });
+    const editedComment = await workModel.handleLinearToolResult({
+      args: { body: 'Looks good after edit', id: 'comment-1' },
+      data: {
+        body: 'Looks good after edit',
+        id: 'comment-1',
+        url: 'https://linear.app/lobehub/issue/LOBE-10966#comment-1',
+      },
+      rootOperationId: 'op-linear-comment-edit',
+      sourceToolCallId: 'tool-call-linear-comment-edit',
+      toolName: 'save_comment',
+      topicId,
+    });
+
+    expect(document).toMatchObject({
+      resourceId: 'doc-1',
+      resourceIdentifier: 'linear-document',
+      resourceType: 'linear_document',
+      type: 'linear',
+    });
+    expect(editedDocument).toMatchObject({
+      resourceIdentifier: 'linear-document-8298fa69b2e3',
+      title: 'Linear document updated',
+    });
+    expect(comment).toMatchObject({
+      resourceId: 'comment-1',
+      resourceIdentifier: 'LOBE-10966#comment-',
+      resourceType: 'linear_comment',
+      type: 'linear',
+    });
+    expect(editedComment).toMatchObject({
+      resourceIdentifier: 'LOBE-10966#comment-',
+      title: 'Looks good after edit',
+    });
+
+    const documentVersions = await workModel.listVersions(document!.id);
+    expect(documentVersions.map((item) => item.version)).toEqual([2, 1]);
+    expect(expectLinearSnapshot(documentVersions[0].snapshot)).toMatchObject({
+      content: 'Updated body',
+      entityType: 'document',
+      id: 'doc-1',
+      identifier: 'linear-document-8298fa69b2e3',
+      slugId: '8298fa69b2e3',
+      title: 'Linear document updated',
+    });
+
+    const commentVersions = await workModel.listVersions(comment!.id);
+    expect(commentVersions.map((item) => item.version)).toEqual([2, 1]);
+    expect(expectLinearSnapshot(commentVersions[0].snapshot)).toMatchObject({
+      body: 'Looks good after edit',
+      entityType: 'comment',
+      id: 'comment-1',
+      identifier: null,
+      targetId: null,
+      targetIdentifier: null,
+    });
+    expect(expectLinearSnapshot(commentVersions[1].snapshot)).toMatchObject({
+      issueId: 'LOBE-10966',
+      issueIdentifier: 'LOBE-10966',
+      targetId: 'LOBE-10966',
+      targetIdentifier: 'LOBE-10966',
+      targetType: 'issue',
+    });
+
+    await workModel.handleLinearToolResult({
+      args: { id: 'comment-1' },
+      data: { id: 'comment-1' },
+      sourceToolCallId: 'tool-call-linear-comment-delete',
+      toolName: 'delete_comment',
+      topicId,
+    });
+
+    const deletedCommentWork = await serverDB
+      .select()
+      .from(works)
+      .where(eq(works.resourceId, 'comment-1'));
+    const remainingDocumentWork = await serverDB
+      .select()
+      .from(works)
+      .where(eq(works.resourceId, 'doc-1'));
+    expect(deletedCommentWork).toHaveLength(0);
+    expect(remainingDocumentWork).toHaveLength(1);
+
+    await workModel.handleLinearToolResult({
+      args: { id: 'missing-comment' },
+      data: { id: 'missing-comment' },
+      sourceToolCallId: 'tool-call-linear-comment-delete-missing',
+      toolName: 'delete_comment',
+      topicId,
+    });
   });
 
   it('does not let another user register someone else task', async () => {

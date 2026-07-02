@@ -197,7 +197,7 @@ export class WorkModel {
   private linearSnapshot = (
     params: RegisterLinearWorkParams,
     previous?: LinearWorkVersionSnapshot | null,
-  ): WorkVersionSnapshot => {
+  ): { linear: LinearWorkVersionSnapshot } => {
     const patchFields = new Set(params.patchFields ?? []);
     const pick = <T>(field: LinearWorkPatchField, value: T | null | undefined, fallback: T) =>
       patchFields.has(field)

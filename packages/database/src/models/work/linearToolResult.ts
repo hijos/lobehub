@@ -340,7 +340,6 @@ const resolveResourceIdentifier = (params: {
   id: string;
   record: Record<string, unknown>;
   targetIdentifier: string | null;
-  title: string | null;
   url: string | null;
 }) => {
   switch (params.entityType) {
@@ -424,7 +423,6 @@ const createRegisterOperation = (
     id,
     record,
     targetIdentifier: target.targetIdentifier,
-    title,
     url,
   });
   const patchFields = new Set<LinearWorkPatchField>();
@@ -466,7 +464,9 @@ const createRegisterOperation = (
       icon: patch('icon', optionalStringFromRecord(record, ['icon'])),
       issueId: target.issueId,
       issueIdentifier: target.issueIdentifier,
-      labels: patch('labels', hasOwn(record, 'labels') ? extractLabels(record.labels) : undefined),
+      labels:
+        patch('labels', hasOwn(record, 'labels') ? extractLabels(record.labels) : undefined) ??
+        undefined,
       parentId: patch('parentId', optionalStringFromRecord(record, ['parentId'])),
       priority: patch(
         'priority',

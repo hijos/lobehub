@@ -85,6 +85,8 @@ export interface LinearWorkVersionSnapshot {
   url: string | null;
 }
 
+export type LinearWorkPatchField = keyof Omit<LinearWorkVersionSnapshot, 'entityType' | 'id'>;
+
 export type WorkVersionSnapshot =
   | {
       document: DocumentWorkVersionSnapshot;
@@ -288,6 +290,7 @@ export interface RegisterLinearWorkParams {
   issueIdentifier?: string | null;
   labels?: string[];
   parentId?: string | null;
+  patchFields?: LinearWorkPatchField[];
   priority?: string | null;
   priorityValue?: number | null;
   project?: string | null;

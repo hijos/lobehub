@@ -702,7 +702,8 @@ describe('WorkModel', () => {
       args: { team: 'Engineering', title: 'Linear Work issue' },
       data: {
         description: 'Track Linear issue as Work',
-        id: 'LOBE-10966',
+        id: 'issue-uuid-10966',
+        identifier: 'LOBE-10966',
         labels: ['claude code'],
         priority: { name: 'High', value: 2 },
         state: { name: 'Backlog' },
@@ -719,15 +720,12 @@ describe('WorkModel', () => {
     });
 
     const second = await workModel.handleLinearToolResult({
-      args: { id: 'LOBE-10966', state: 'In Progress' },
+      args: { id: 'issue-uuid-10966', state: 'In Progress' },
       data: {
-        description: 'Updated Linear issue as Work',
-        id: 'LOBE-10966',
+        id: 'issue-uuid-10966',
         state: 'In Progress',
         statusType: 'started',
-        title: 'Linear Work issue updated',
         updatedAt: '2026-07-01T13:23:10.614Z',
-        url: 'https://linear.app/lobehub/issue/LOBE-10966/linear-work-issue',
       },
       rootOperationId: 'op-linear-issue-edit',
       sourceToolCallId: 'tool-call-linear-issue-edit',
@@ -735,11 +733,10 @@ describe('WorkModel', () => {
       topicId,
     });
     const replay = await workModel.handleLinearToolResult({
-      args: { id: 'LOBE-10966', state: 'In Progress' },
+      args: { id: 'issue-uuid-10966', state: 'In Progress' },
       data: {
-        id: 'LOBE-10966',
+        id: 'issue-uuid-10966',
         state: 'In Progress',
-        title: 'Linear Work issue updated',
       },
       rootOperationId: 'op-linear-issue-edit',
       sourceToolCallId: 'tool-call-linear-issue-edit',
@@ -750,10 +747,10 @@ describe('WorkModel', () => {
     expect(second?.id).toBe(first?.id);
     expect(replay?.id).toBe(first?.id);
     expect(second).toMatchObject({
-      resourceId: 'LOBE-10966',
+      resourceId: 'issue-uuid-10966',
       resourceIdentifier: 'LOBE-10966',
       resourceType: 'linear_issue',
-      title: 'Linear Work issue updated',
+      title: 'Linear Work issue',
       type: 'linear',
     });
 
@@ -761,13 +758,18 @@ describe('WorkModel', () => {
     expect(versions.map((item) => item.version)).toEqual([2, 1]);
     expect(versions[0].context?.role).toBe('updated');
     expect(expectLinearSnapshot(versions[0].snapshot)).toMatchObject({
-      description: 'Updated Linear issue as Work',
+      description: 'Track Linear issue as Work',
       entityType: 'issue',
-      id: 'LOBE-10966',
+      id: 'issue-uuid-10966',
       identifier: 'LOBE-10966',
+      labels: ['claude code'],
+      priority: 'High',
+      priorityValue: 2,
       status: 'In Progress',
       statusType: 'started',
-      title: 'Linear Work issue updated',
+      team: 'Engineering',
+      teamId: 'team-1',
+      title: 'Linear Work issue',
       updatedAt: '2026-07-01T13:23:10.614Z',
     });
     expect(expectLinearSnapshot(versions[0].snapshot)).not.toHaveProperty('raw');
@@ -788,7 +790,10 @@ describe('WorkModel', () => {
     expect(issueSummary.linear).toMatchObject({
       entityType: 'issue',
       identifier: 'LOBE-10966',
+      labels: ['claude code'],
+      priority: 'High',
       status: 'In Progress',
+      team: 'Engineering',
     });
 
     const byConversation = await workModel.listByConversation({ topicId });
@@ -852,6 +857,17 @@ describe('WorkModel', () => {
       toolName: 'save_document',
       topicId,
     });
+    const partialDocumentUpdate = await workModel.handleLinearToolResult({
+      args: { content: 'Partial body', id: 'doc-1' },
+      data: {
+        content: 'Partial body',
+        id: 'doc-1',
+      },
+      rootOperationId: 'op-linear-document-partial-edit',
+      sourceToolCallId: 'tool-call-linear-document-partial-edit',
+      toolName: 'save_document',
+      topicId,
+    });
 
     const comment = await workModel.handleLinearToolResult({
       args: { body: 'Looks good', issueId: 'LOBE-10966' },
@@ -888,6 +904,10 @@ describe('WorkModel', () => {
       resourceIdentifier: 'linear-document-8298fa69b2e3',
       title: 'Linear document updated',
     });
+    expect(partialDocumentUpdate).toMatchObject({
+      resourceIdentifier: 'linear-document-8298fa69b2e3',
+      title: 'Linear document updated',
+    });
     expect(comment).toMatchObject({
       resourceId: 'comment-1',
       resourceIdentifier: 'LOBE-10966#comment-',
@@ -900,14 +920,18 @@ describe('WorkModel', () => {
     });
 
     const documentVersions = await workModel.listVersions(document!.id);
-    expect(documentVersions.map((item) => item.version)).toEqual([2, 1]);
+    expect(documentVersions.map((item) => item.version)).toEqual([3, 2, 1]);
     expect(expectLinearSnapshot(documentVersions[0].snapshot)).toMatchObject({
-      content: 'Updated body',
+      content: 'Partial body',
       entityType: 'document',
       id: 'doc-1',
       identifier: 'linear-document-8298fa69b2e3',
       slugId: '8298fa69b2e3',
       title: 'Linear document updated',
+    });
+    expect(expectLinearSnapshot(documentVersions[1].snapshot)).toMatchObject({
+      content: 'Updated body',
+      identifier: 'linear-document-8298fa69b2e3',
     });
 
     const commentVersions = await workModel.listVersions(comment!.id);
@@ -916,9 +940,11 @@ describe('WorkModel', () => {
       body: 'Looks good after edit',
       entityType: 'comment',
       id: 'comment-1',
-      identifier: null,
-      targetId: null,
-      targetIdentifier: null,
+      issueId: 'LOBE-10966',
+      issueIdentifier: 'LOBE-10966',
+      targetId: 'LOBE-10966',
+      targetIdentifier: 'LOBE-10966',
+      targetType: 'issue',
     });
     expect(expectLinearSnapshot(commentVersions[1].snapshot)).toMatchObject({
       issueId: 'LOBE-10966',
@@ -954,6 +980,56 @@ describe('WorkModel', () => {
       toolName: 'delete_comment',
       topicId,
     });
+  });
+
+  it('keeps Linear works isolated by user for the same external resource', async () => {
+    const otherTopicId = 'work-test-other-linear-topic-id';
+    await serverDB.insert(topics).values({ id: otherTopicId, userId: userId2 });
+
+    const workModel = new WorkModel(serverDB, userId);
+    const otherWorkModel = new WorkModel(serverDB, userId2);
+
+    const ownerWork = await workModel.handleLinearToolResult({
+      args: { body: 'Owner comment', issueId: 'LOBE-10966' },
+      data: {
+        body: 'Owner comment',
+        id: 'shared-comment',
+        url: 'https://linear.app/lobehub/issue/LOBE-10966#shared-comment',
+      },
+      sourceToolCallId: 'tool-call-linear-owner-comment',
+      toolName: 'save_comment',
+      topicId,
+    });
+    const otherWork = await otherWorkModel.handleLinearToolResult({
+      args: { body: 'Other user comment', issueId: 'LOBE-10966' },
+      data: {
+        body: 'Other user comment',
+        id: 'shared-comment',
+        url: 'https://linear.app/lobehub/issue/LOBE-10966#shared-comment',
+      },
+      sourceToolCallId: 'tool-call-linear-other-comment',
+      toolName: 'save_comment',
+      topicId: otherTopicId,
+    });
+
+    expect(ownerWork?.id).not.toBe(otherWork?.id);
+
+    await otherWorkModel.handleLinearToolResult({
+      args: { id: 'shared-comment' },
+      data: { id: 'shared-comment' },
+      sourceToolCallId: 'tool-call-linear-other-comment-delete',
+      toolName: 'delete_comment',
+      topicId: otherTopicId,
+    });
+
+    const ownerItems = await workModel.listByConversation({ topicId });
+    const otherItems = await otherWorkModel.listByConversation({ topicId: otherTopicId });
+    expect(ownerItems).toHaveLength(1);
+    expect(ownerItems[0]).toMatchObject({
+      resourceId: 'shared-comment',
+      type: 'linear',
+    });
+    expect(otherItems).toHaveLength(0);
   });
 
   it('does not let another user register someone else task', async () => {

@@ -7,6 +7,7 @@ import type {
   DocumentWorkVersionSnapshot,
   LinearWorkContextVersionItem,
   LinearWorkListItem,
+  LinearWorkPatchField,
   LinearWorkSummaryItem,
   LinearWorkVersionSnapshot,
   RegisterDocumentWorkParams,
@@ -193,46 +194,57 @@ export class WorkModel {
     };
   };
 
-  private linearSnapshot = (params: RegisterLinearWorkParams): WorkVersionSnapshot => ({
-    linear: {
-      assignee: params.assignee ?? null,
-      assigneeId: params.assigneeId ?? null,
-      body: params.body ?? null,
-      color: params.color ?? null,
-      content: params.content ?? null,
-      createdAt: params.createdAt ?? null,
-      description: params.description ?? null,
-      dueDate: params.dueDate ?? null,
-      entityType:
-        params.resourceType === 'linear_issue'
-          ? 'issue'
-          : params.resourceType === 'linear_document'
-            ? 'document'
-            : 'comment',
-      id: params.resourceId,
-      icon: params.icon ?? null,
-      identifier: params.resourceIdentifier ?? null,
-      issueId: params.issueId ?? null,
-      issueIdentifier: params.issueIdentifier ?? null,
-      labels: params.labels ?? [],
-      parentId: params.parentId ?? null,
-      priority: params.priority ?? null,
-      priorityValue: params.priorityValue ?? null,
-      project: params.project ?? null,
-      projectId: params.projectId ?? null,
-      slugId: params.slugId ?? null,
-      status: params.status ?? null,
-      statusType: params.statusType ?? null,
-      targetId: params.targetId ?? null,
-      targetIdentifier: params.targetIdentifier ?? null,
-      targetType: params.targetType ?? null,
-      team: params.team ?? null,
-      teamId: params.teamId ?? null,
-      title: params.title ?? null,
-      updatedAt: params.updatedAt ?? null,
-      url: params.url ?? null,
-    } satisfies LinearWorkVersionSnapshot,
-  });
+  private linearSnapshot = (
+    params: RegisterLinearWorkParams,
+    previous?: LinearWorkVersionSnapshot | null,
+  ): WorkVersionSnapshot => {
+    const patchFields = new Set(params.patchFields ?? []);
+    const pick = <T>(field: LinearWorkPatchField, value: T | null | undefined, fallback: T) =>
+      patchFields.has(field)
+        ? (value ?? fallback)
+        : ((previous?.[field] as T | undefined) ?? fallback);
+
+    return {
+      linear: {
+        assignee: pick('assignee', params.assignee, null),
+        assigneeId: pick('assigneeId', params.assigneeId, null),
+        body: pick('body', params.body, null),
+        color: pick('color', params.color, null),
+        content: pick('content', params.content, null),
+        createdAt: pick('createdAt', params.createdAt, null),
+        description: pick('description', params.description, null),
+        dueDate: pick('dueDate', params.dueDate, null),
+        entityType:
+          params.resourceType === 'linear_issue'
+            ? 'issue'
+            : params.resourceType === 'linear_document'
+              ? 'document'
+              : 'comment',
+        id: params.resourceId,
+        icon: pick('icon', params.icon, null),
+        identifier: pick('identifier', params.resourceIdentifier, null),
+        issueId: pick('issueId', params.issueId, null),
+        issueIdentifier: pick('issueIdentifier', params.issueIdentifier, null),
+        labels: pick('labels', params.labels, []),
+        parentId: pick('parentId', params.parentId, null),
+        priority: pick('priority', params.priority, null),
+        priorityValue: pick('priorityValue', params.priorityValue, null),
+        project: pick('project', params.project, null),
+        projectId: pick('projectId', params.projectId, null),
+        slugId: pick('slugId', params.slugId, null),
+        status: pick('status', params.status, null),
+        statusType: pick('statusType', params.statusType, null),
+        targetId: pick('targetId', params.targetId, null),
+        targetIdentifier: pick('targetIdentifier', params.targetIdentifier, null),
+        targetType: pick('targetType', params.targetType, null),
+        team: pick('team', params.team, null),
+        teamId: pick('teamId', params.teamId, null),
+        title: pick('title', params.title, null),
+        updatedAt: pick('updatedAt', params.updatedAt, null),
+        url: pick('url', params.url, null),
+      } satisfies LinearWorkVersionSnapshot,
+    };
+  };
 
   private resolveTask = async (params: RegisterTaskWorkParams): Promise<TaskItem | null> => {
     const filters: SQL[] = [];
@@ -299,8 +311,9 @@ export class WorkModel {
   private documentTitle = (doc: DocumentItem, title?: string | null) =>
     title?.trim() || doc.title?.trim() || doc.filename?.trim() || doc.id;
 
-  private linearTitle = (params: RegisterLinearWorkParams) =>
+  private linearTitle = (params: RegisterLinearWorkParams, fallbackTitle?: string | null) =>
     params.title?.trim() ||
+    fallbackTitle?.trim() ||
     params.resourceIdentifier?.trim() ||
     `${params.resourceType.replace('linear_', 'Linear ')} ${params.resourceId}`;
 
@@ -378,15 +391,14 @@ export class WorkModel {
     return work;
   };
 
-  private upsertLinearWork = async (
-    params: RegisterLinearWorkParams,
-    title: string,
-  ): Promise<WorkItem> => {
+  private upsertLinearWork = async (params: RegisterLinearWorkParams): Promise<WorkItem> => {
+    const insertTitle = this.linearTitle(params);
+    const updateTitle = params.patchFields?.includes('title') ? params.title?.trim() || null : null;
     const values = {
       resourceId: params.resourceId,
       resourceIdentifier: params.resourceIdentifier ?? null,
       resourceType: params.resourceType,
-      title,
+      title: insertTitle,
       type: 'linear' as const,
       userId: this.userId,
       workspaceId: this.workspaceId ?? null,
@@ -409,7 +421,7 @@ export class WorkModel {
         ...conflict,
         set: {
           resourceIdentifier: sql`COALESCE(${params.resourceIdentifier ?? null}, ${works.resourceIdentifier})`,
-          title,
+          title: sql`COALESCE(${updateTitle}, ${works.title})`,
           updatedAt: new Date(),
         },
       })
@@ -449,6 +461,21 @@ export class WorkModel {
       .limit(1);
 
     return row?.version ?? null;
+  };
+
+  private findCurrentLinearSnapshot = async (
+    workId: string,
+  ): Promise<LinearWorkVersionSnapshot | null> => {
+    const [row] = await this.db
+      .select({
+        linear: sql<LinearWorkVersionSnapshot>`${workVersions.snapshot}->'linear'`,
+      })
+      .from(works)
+      .innerJoin(workVersions, eq(works.currentVersionId, workVersions.id))
+      .where(and(eq(works.id, workId), this.ownership(), eq(works.type, 'linear')))
+      .limit(1);
+
+    return row?.linear ?? null;
   };
 
   private createTaskVersion = async (
@@ -601,8 +628,10 @@ export class WorkModel {
     const existing = await this.findVersionBySourceToolCall(work.id, params.sourceToolCallId);
     if (existing) return existing;
 
-    const title = this.linearTitle(params);
-    const snapshot = this.linearSnapshot(params);
+    const previousSnapshot = await this.findCurrentLinearSnapshot(work.id);
+    // Linear update responses can be partial, e.g. { id, state }; keep prior labels/team.
+    const snapshot = this.linearSnapshot(params, previousSnapshot);
+    const title = snapshot.linear.title?.trim() || work.title;
 
     for (let attempt = 0; attempt < MAX_VERSION_CREATE_RETRIES; attempt += 1) {
       try {
@@ -687,8 +716,7 @@ export class WorkModel {
   };
 
   registerLinear = async (params: RegisterLinearWorkParams): Promise<WorkItem | null> => {
-    const title = this.linearTitle(params);
-    const work = await this.upsertLinearWork(params, title);
+    const work = await this.upsertLinearWork(params);
     await this.createLinearVersion(work, params);
 
     return this.findById(work.id);

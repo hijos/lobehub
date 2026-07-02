@@ -1,6 +1,7 @@
 import type {
   DeleteLinearWorkParams,
   LinearWorkEntityType,
+  LinearWorkPatchField,
   LinearWorkResourceType,
   RegisterLinearToolResultWorkParams,
   RegisterLinearWorkParams,
@@ -60,6 +61,93 @@ const snapshotText = (value: unknown): string | null => {
 
 const numberValue = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
+
+const hasOwn = (record: Record<string, unknown>, key: string) =>
+  Object.prototype.hasOwnProperty.call(record, key);
+
+const firstDefined = <T>(...values: Array<T | null | undefined>): T | null | undefined =>
+  values.find((value) => value !== undefined);
+
+const optionalStringFromRecord = (
+  record: Record<string, unknown>,
+  keys: string[],
+): string | null | undefined => {
+  for (const key of keys) {
+    if (!hasOwn(record, key)) continue;
+
+    const raw = record[key];
+    if (raw === null) return null;
+
+    const value = stringValue(raw);
+    if (value) return value;
+    if (typeof raw === 'string') return null;
+  }
+
+  return undefined;
+};
+
+const optionalTextFromRecord = (
+  record: Record<string, unknown>,
+  keys: string[],
+): string | null | undefined => {
+  for (const key of keys) {
+    if (!hasOwn(record, key)) continue;
+
+    const raw = record[key];
+    if (raw === null) return null;
+
+    const value = snapshotText(raw);
+    if (value) return value;
+    if (typeof raw === 'string') return null;
+  }
+
+  return undefined;
+};
+
+const optionalNumberFromRecord = (
+  record: Record<string, unknown>,
+  keys: string[],
+): number | null | undefined => {
+  for (const key of keys) {
+    if (!hasOwn(record, key)) continue;
+
+    const raw = record[key];
+    if (raw === null) return null;
+
+    const value = numberValue(raw);
+    if (value !== null) return value;
+  }
+
+  return undefined;
+};
+
+const optionalStringFromNestedRecord = (
+  record: Record<string, unknown>,
+  key: string,
+  keys: string[],
+): string | null | undefined => {
+  if (!hasOwn(record, key)) return undefined;
+  if (record[key] === null) return null;
+
+  const nested = toRecord(record[key]);
+  if (!nested) return undefined;
+
+  return optionalStringFromRecord(nested, keys) ?? null;
+};
+
+const optionalNumberFromNestedRecord = (
+  record: Record<string, unknown>,
+  key: string,
+  keys: string[],
+): number | null | undefined => {
+  if (!hasOwn(record, key)) return undefined;
+  if (record[key] === null) return null;
+
+  const nested = toRecord(record[key]);
+  if (!nested) return undefined;
+
+  return optionalNumberFromRecord(nested, keys) ?? null;
+};
 
 const nestedRecord = (record: Record<string, unknown>, keys: string[]) => {
   for (const key of keys) {
@@ -267,9 +355,7 @@ const resolveResourceIdentifier = (params: {
       return (
         fromRecord(params.record, ['slug']) ??
         urlSegmentAfter(params.url, 'document') ??
-        fromRecord(params.record, ['slugId']) ??
-        params.title ??
-        params.id
+        fromRecord(params.record, ['slugId'])
       );
     }
 
@@ -277,9 +363,7 @@ const resolveResourceIdentifier = (params: {
       return (
         fromRecord(params.record, ['identifier', 'key']) ??
         (isIssueIdentifier(params.id) ? params.id : null) ??
-        urlSegmentAfter(params.url, 'issue') ??
-        params.title ??
-        params.id
+        urlSegmentAfter(params.url, 'issue')
       );
     }
   }
@@ -332,8 +416,8 @@ const createRegisterOperation = (
 
   const url = fromRecord(record, ['url', 'appUrl']);
   const title =
-    fromRecord(record, ['title', 'name', 'subject']) ??
-    (entityType === 'comment' ? textFromRecord(record, ['body']) : null);
+    optionalStringFromRecord(record, ['title', 'name', 'subject']) ??
+    (entityType === 'comment' ? optionalTextFromRecord(record, ['body']) : undefined);
   const target = resolveTarget(params, record);
   const identifier = resolveResourceIdentifier({
     entityType,
@@ -343,52 +427,115 @@ const createRegisterOperation = (
     title,
     url,
   });
-  const parentId = fromRecord(record, ['parentId']);
-  const priority = toRecord(record.priority);
-  const state = toRecord(record.state);
+  const patchFields = new Set<LinearWorkPatchField>();
+  const patch = <T>(field: LinearWorkPatchField, value: T | null | undefined) => {
+    if (value !== undefined) patchFields.add(field);
+    return value;
+  };
+
+  if (identifier) patchFields.add('identifier');
+  if (target.issueId) patchFields.add('issueId');
+  if (target.issueIdentifier) patchFields.add('issueIdentifier');
+  if (target.targetId) patchFields.add('targetId');
+  if (target.targetIdentifier) patchFields.add('targetIdentifier');
+  if (target.targetType) patchFields.add('targetType');
 
   return {
     params: {
       ...contextParams(params),
-      assignee:
-        fromRecord(record, ['assignee']) ?? fromNestedRecord(record, 'assignee', ['name', 'id']),
-      assigneeId:
-        fromRecord(record, ['assigneeId']) ?? fromNestedRecord(record, 'assignee', ['id']),
-      body: textFromRecord(record, ['body']),
-      color: fromRecord(record, ['color']),
-      content: textFromRecord(record, ['content']),
-      createdAt: fromRecord(record, ['createdAt']),
-      description: textFromRecord(record, ['description']),
-      dueDate: fromRecord(record, ['dueDate']),
-      icon: fromRecord(record, ['icon']),
+      assignee: patch(
+        'assignee',
+        firstDefined(
+          optionalStringFromRecord(record, ['assignee']),
+          optionalStringFromNestedRecord(record, 'assignee', ['name', 'id']),
+        ),
+      ),
+      assigneeId: patch(
+        'assigneeId',
+        firstDefined(
+          optionalStringFromRecord(record, ['assigneeId']),
+          optionalStringFromNestedRecord(record, 'assignee', ['id']),
+        ),
+      ),
+      body: patch('body', optionalTextFromRecord(record, ['body'])),
+      color: patch('color', optionalStringFromRecord(record, ['color'])),
+      content: patch('content', optionalTextFromRecord(record, ['content'])),
+      createdAt: patch('createdAt', optionalStringFromRecord(record, ['createdAt'])),
+      description: patch('description', optionalTextFromRecord(record, ['description'])),
+      dueDate: patch('dueDate', optionalStringFromRecord(record, ['dueDate'])),
+      icon: patch('icon', optionalStringFromRecord(record, ['icon'])),
       issueId: target.issueId,
       issueIdentifier: target.issueIdentifier,
-      labels: extractLabels(record.labels),
-      parentId,
-      priority: fromRecord(record, ['priority']) ?? fromRecord(priority ?? {}, ['name']),
-      priorityValue:
-        numberFromRecord(record, ['priority']) ?? numberFromRecord(priority ?? {}, ['value']),
-      project:
-        fromRecord(record, ['project']) ??
-        fromNestedRecord(record, 'project', ['name', 'slug', 'id']),
-      projectId: fromRecord(record, ['projectId']) ?? fromNestedRecord(record, 'project', ['id']),
+      labels: patch('labels', hasOwn(record, 'labels') ? extractLabels(record.labels) : undefined),
+      parentId: patch('parentId', optionalStringFromRecord(record, ['parentId'])),
+      priority: patch(
+        'priority',
+        firstDefined(
+          optionalStringFromRecord(record, ['priority']),
+          optionalStringFromNestedRecord(record, 'priority', ['name']),
+        ),
+      ),
+      priorityValue: patch(
+        'priorityValue',
+        firstDefined(
+          optionalNumberFromRecord(record, ['priority']),
+          optionalNumberFromNestedRecord(record, 'priority', ['value']),
+        ),
+      ),
+      project: patch(
+        'project',
+        firstDefined(
+          optionalStringFromRecord(record, ['project']),
+          optionalStringFromNestedRecord(record, 'project', ['name', 'slug', 'id']),
+        ),
+      ),
+      projectId: patch(
+        'projectId',
+        firstDefined(
+          optionalStringFromRecord(record, ['projectId']),
+          optionalStringFromNestedRecord(record, 'project', ['id']),
+        ),
+      ),
       resourceId: id,
       resourceIdentifier: identifier,
       resourceType: linearResourceType(entityType),
       role: LINEAR_CREATE_TOOLS.has(params.toolName) && !params.args?.id ? 'created' : 'updated',
-      status:
-        fromRecord(record, ['status', 'state', 'statusName', 'stateName']) ??
-        fromRecord(state ?? {}, ['name', 'type']),
-      statusType: fromRecord(record, ['statusType']) ?? fromRecord(state ?? {}, ['type']),
-      slugId: fromRecord(record, ['slugId']),
+      status: patch(
+        'status',
+        firstDefined(
+          optionalStringFromRecord(record, ['status', 'state', 'statusName', 'stateName']),
+          optionalStringFromNestedRecord(record, 'state', ['name', 'type']),
+        ),
+      ),
+      statusType: patch(
+        'statusType',
+        firstDefined(
+          optionalStringFromRecord(record, ['statusType']),
+          optionalStringFromNestedRecord(record, 'state', ['type']),
+        ),
+      ),
+      slugId: patch('slugId', optionalStringFromRecord(record, ['slugId'])),
       targetId: target.targetId,
       targetIdentifier: target.targetIdentifier,
       targetType: target.targetType,
-      team: fromRecord(record, ['team']) ?? fromNestedRecord(record, 'team', ['name', 'key', 'id']),
-      teamId: fromRecord(record, ['teamId']) ?? fromNestedRecord(record, 'team', ['id']),
-      title: title ?? identifier ?? id,
-      updatedAt: fromRecord(record, ['updatedAt']),
-      url,
+      team: patch(
+        'team',
+        firstDefined(
+          optionalStringFromRecord(record, ['team']),
+          optionalStringFromNestedRecord(record, 'team', ['name', 'key', 'id']),
+        ),
+      ),
+      teamId: patch(
+        'teamId',
+        firstDefined(
+          optionalStringFromRecord(record, ['teamId']),
+          optionalStringFromNestedRecord(record, 'team', ['id']),
+        ),
+      ),
+      title: patch('title', title),
+      updatedAt: patch('updatedAt', optionalStringFromRecord(record, ['updatedAt'])),
+      url: patch('url', optionalStringFromRecord(record, ['url', 'appUrl'])),
+      patchFields: Array.from(patchFields),
     },
     type: 'register',
   };

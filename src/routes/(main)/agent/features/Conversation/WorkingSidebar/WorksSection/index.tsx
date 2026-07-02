@@ -10,18 +10,17 @@ import { createStaticStyles } from 'antd-style';
 import {
   ChevronDownIcon,
   ChevronRightIcon,
-  CircleDotIcon,
   ClipboardListIcon,
   FileTextIcon,
   HistoryIcon,
   ListIcon,
-  MessageSquareTextIcon,
 } from 'lucide-react';
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import NeuralNetworkLoading from '@/components/NeuralNetworkLoading';
 import { formatTaskItemDate } from '@/features/AgentTasks/features/formatTaskItemDate';
+import LinearIcon from '@/features/AgentTasks/features/icons/LinearIcon';
 import TaskPriorityTag from '@/features/AgentTasks/features/TaskPriorityTag';
 import TaskStatusTag from '@/features/AgentTasks/features/TaskStatusTag';
 import WorkSummaryCard from '@/features/AgentTasks/features/WorkSummaryCard';
@@ -281,12 +280,6 @@ const LinearWorkVersionHistoryCard = memo<{ work: Extract<WorkListItem, { type: 
     const [expanded, setExpanded] = useState(true);
     const ToggleIcon = expanded ? ChevronDownIcon : ChevronRightIcon;
     const label = work.resourceIdentifier ?? work.resourceId;
-    const Icon =
-      work.linear.entityType === 'comment'
-        ? MessageSquareTextIcon
-        : work.linear.entityType === 'document'
-          ? FileTextIcon
-          : CircleDotIcon;
 
     return (
       <Flexbox className={styles.workCard}>
@@ -298,7 +291,7 @@ const LinearWorkVersionHistoryCard = memo<{ work: Extract<WorkListItem, { type: 
           onClick={() => setExpanded((value) => !value)}
         >
           <ToggleIcon size={16} />
-          <Icon className={styles.context} size={16} />
+          <LinearIcon className={styles.context} size={16} />
           <Text className={styles.context} style={{ flexShrink: 0 }}>
             {label}
           </Text>

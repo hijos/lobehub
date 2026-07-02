@@ -3,17 +3,14 @@
 import type { WorkSummaryItem } from '@lobechat/types';
 import { Flexbox, Text } from '@lobehub/ui';
 import { createStaticStyles } from 'antd-style';
-import {
-  CircleDotIcon,
-  ClipboardListIcon,
-  FileTextIcon,
-  MessageSquareTextIcon,
-} from 'lucide-react';
+import { ClipboardListIcon, FileTextIcon } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useChatStore } from '@/store/chat';
 import { formatWorkVersionCost } from '@/utils/workVersionCost';
+
+import LinearIcon from './icons/LinearIcon';
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
   card: css`
@@ -81,15 +78,7 @@ const WorkSummaryCard = memo<WorkSummaryCardProps>(({ className, item }) => {
           item.linear.status
         )?.trim()
       : item.task.description?.trim();
-  const Icon = isDocument
-    ? FileTextIcon
-    : isLinear
-      ? item.linear.entityType === 'comment'
-        ? MessageSquareTextIcon
-        : item.linear.entityType === 'document'
-          ? FileTextIcon
-          : CircleDotIcon
-      : ClipboardListIcon;
+  const Icon = isDocument ? FileTextIcon : isLinear ? LinearIcon : ClipboardListIcon;
   const handleOpen = () => {
     if (isDocument) {
       openDocument(item.document.id, item.context.metadata?.agentDocumentId);

@@ -3,16 +3,12 @@ import type { TaskAutomationMode, TaskStatus } from './task';
 export type WorkType = 'document' | 'linear' | 'task';
 export type WorkStatus = 'archived' | 'draft' | 'published';
 export type WorkVisibility = 'private' | 'public' | 'workspace';
-export type LinearWorkResourceType = 'linear_comment' | 'linear_document' | 'linear_issue';
+export type LinearWorkResourceType = 'linear_document' | 'linear_issue';
 export type WorkResourceType = 'document' | LinearWorkResourceType | 'task';
 export type WorkRenderType = 'document_snapshot' | 'linear_snapshot' | 'task_snapshot';
 export type WorkContentRefType = 'file' | 'inline_snapshot' | 'storage' | 'url';
 export type WorkContextRole =
-  | 'created'
-  | 'published'
-  | 'referenced'
-  | 'updated'
-  | 'used_as_context';
+  'created' | 'published' | 'referenced' | 'updated' | 'used_as_context';
 export type WorkSourceType = 'import' | 'system' | 'tool' | 'user';
 
 export interface TaskWorkVersionSnapshot {
@@ -49,12 +45,11 @@ export interface DocumentWorkVersionSnapshot {
   url: string | null;
 }
 
-export type LinearWorkEntityType = 'comment' | 'document' | 'issue';
+export type LinearWorkEntityType = 'document' | 'issue';
 
 export interface LinearWorkVersionSnapshot {
   assignee: string | null;
   assigneeId: string | null;
-  body: string | null;
   color: string | null;
   content: string | null;
   createdAt: string | null;
@@ -216,9 +211,7 @@ export interface LinearWorkContextVersionItem extends LinearWorkListItem {
 }
 
 export type WorkContextVersionItem =
-  | DocumentWorkContextVersionItem
-  | LinearWorkContextVersionItem
-  | TaskWorkContextVersionItem;
+  DocumentWorkContextVersionItem | LinearWorkContextVersionItem | TaskWorkContextVersionItem;
 export type TaskWorkContextVersionMap = Record<string, TaskWorkContextVersionItem[]>;
 export type WorkContextVersionMap = Record<string, WorkContextVersionItem[]>;
 
@@ -279,7 +272,6 @@ export interface RegisterLinearWorkParams {
   actorAgentId?: string | null;
   assignee?: string | null;
   assigneeId?: string | null;
-  body?: string | null;
   color?: string | null;
   content?: string | null;
   createdAt?: string | null;
@@ -317,11 +309,6 @@ export interface RegisterLinearWorkParams {
   topicId?: string | null;
   updatedAt?: string | null;
   url?: string | null;
-}
-
-export interface DeleteLinearWorkParams {
-  resourceId: string;
-  resourceType: LinearWorkResourceType;
 }
 
 export interface RegisterLinearToolResultWorkParams {

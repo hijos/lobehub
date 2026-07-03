@@ -71,12 +71,7 @@ const WorkSummaryCard = memo<WorkSummaryCardProps>(({ className, item }) => {
   const description = isDocument
     ? item.document.description?.trim()
     : isLinear
-      ? (
-          item.linear.description ||
-          item.linear.body ||
-          item.linear.content ||
-          item.linear.status
-        )?.trim()
+      ? (item.linear.description || item.linear.content || item.linear.status)?.trim()
       : item.task.description?.trim();
   const Icon = isDocument ? FileTextIcon : isLinear ? LinearIcon : ClipboardListIcon;
   const handleOpen = () => {

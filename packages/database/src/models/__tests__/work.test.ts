@@ -824,7 +824,7 @@ describe('WorkModel', () => {
     expect(workRows).toHaveLength(1);
   });
 
-  it('registers Linear documents and comments and deletes comment work', async () => {
+  it('registers Linear documents and keeps merged snapshots across partial updates', async () => {
     const workModel = new WorkModel(serverDB, userId);
 
     const document = await workModel.handleLinearToolResult({
@@ -869,6 +869,8 @@ describe('WorkModel', () => {
       topicId,
     });
 
+    // Comments are intentionally NOT adapted as Work entities — a comment
+    // mutation must neither create its own work nor touch the parent issue.
     const comment = await workModel.handleLinearToolResult({
       args: { body: 'Looks good', issueId: 'LOBE-10966' },
       data: {
@@ -881,18 +883,7 @@ describe('WorkModel', () => {
       toolName: 'save_comment',
       topicId,
     });
-    const editedComment = await workModel.handleLinearToolResult({
-      args: { body: 'Looks good after edit', id: 'comment-1' },
-      data: {
-        body: 'Looks good after edit',
-        id: 'comment-1',
-        url: 'https://linear.app/lobehub/issue/LOBE-10966#comment-1',
-      },
-      rootOperationId: 'op-linear-comment-edit',
-      sourceToolCallId: 'tool-call-linear-comment-edit',
-      toolName: 'save_comment',
-      topicId,
-    });
+    expect(comment).toBeNull();
 
     expect(document).toMatchObject({
       resourceId: 'doc-1',
@@ -907,16 +898,6 @@ describe('WorkModel', () => {
     expect(partialDocumentUpdate).toMatchObject({
       resourceIdentifier: 'linear-document-8298fa69b2e3',
       title: 'Linear document updated',
-    });
-    expect(comment).toMatchObject({
-      resourceId: 'comment-1',
-      resourceIdentifier: 'LOBE-10966#comment-',
-      resourceType: 'linear_comment',
-      type: 'linear',
-    });
-    expect(editedComment).toMatchObject({
-      resourceIdentifier: 'LOBE-10966#comment-',
-      title: 'Looks good after edit',
     });
 
     const documentVersions = await workModel.listVersions(document!.id);
@@ -934,26 +915,6 @@ describe('WorkModel', () => {
       identifier: 'linear-document-8298fa69b2e3',
     });
 
-    const commentVersions = await workModel.listVersions(comment!.id);
-    expect(commentVersions.map((item) => item.version)).toEqual([2, 1]);
-    expect(expectLinearSnapshot(commentVersions[0].snapshot)).toMatchObject({
-      body: 'Looks good after edit',
-      entityType: 'comment',
-      id: 'comment-1',
-      issueId: 'LOBE-10966',
-      issueIdentifier: 'LOBE-10966',
-      targetId: 'LOBE-10966',
-      targetIdentifier: 'LOBE-10966',
-      targetType: 'issue',
-    });
-    expect(expectLinearSnapshot(commentVersions[1].snapshot)).toMatchObject({
-      issueId: 'LOBE-10966',
-      issueIdentifier: 'LOBE-10966',
-      targetId: 'LOBE-10966',
-      targetIdentifier: 'LOBE-10966',
-      targetType: 'issue',
-    });
-
     await workModel.handleLinearToolResult({
       args: { id: 'comment-1' },
       data: { id: 'comment-1' },
@@ -962,24 +923,13 @@ describe('WorkModel', () => {
       topicId,
     });
 
-    const deletedCommentWork = await serverDB
+    const commentWork = await serverDB
       .select()
       .from(works)
       .where(eq(works.resourceId, 'comment-1'));
-    const remainingDocumentWork = await serverDB
-      .select()
-      .from(works)
-      .where(eq(works.resourceId, 'doc-1'));
-    expect(deletedCommentWork).toHaveLength(0);
-    expect(remainingDocumentWork).toHaveLength(1);
-
-    await workModel.handleLinearToolResult({
-      args: { id: 'missing-comment' },
-      data: { id: 'missing-comment' },
-      sourceToolCallId: 'tool-call-linear-comment-delete-missing',
-      toolName: 'delete_comment',
-      topicId,
-    });
+    const documentWork = await serverDB.select().from(works).where(eq(works.resourceId, 'doc-1'));
+    expect(commentWork).toHaveLength(0);
+    expect(documentWork).toHaveLength(1);
   });
 
   it('keeps Linear works isolated by user for the same external resource', async () => {
@@ -990,46 +940,47 @@ describe('WorkModel', () => {
     const otherWorkModel = new WorkModel(serverDB, userId2);
 
     const ownerWork = await workModel.handleLinearToolResult({
-      args: { body: 'Owner comment', issueId: 'LOBE-10966' },
+      args: { team: 'Engineering', title: 'Owner issue title' },
       data: {
-        body: 'Owner comment',
-        id: 'shared-comment',
-        url: 'https://linear.app/lobehub/issue/LOBE-10966#shared-comment',
+        id: 'shared-issue-uuid',
+        identifier: 'LOBE-10966',
+        title: 'Owner issue title',
+        url: 'https://linear.app/lobehub/issue/LOBE-10966/shared-issue',
       },
-      sourceToolCallId: 'tool-call-linear-owner-comment',
-      toolName: 'save_comment',
+      sourceToolCallId: 'tool-call-linear-owner-issue',
+      toolName: 'save_issue',
       topicId,
     });
     const otherWork = await otherWorkModel.handleLinearToolResult({
-      args: { body: 'Other user comment', issueId: 'LOBE-10966' },
+      args: { id: 'shared-issue-uuid', title: 'Other user issue title' },
       data: {
-        body: 'Other user comment',
-        id: 'shared-comment',
-        url: 'https://linear.app/lobehub/issue/LOBE-10966#shared-comment',
+        id: 'shared-issue-uuid',
+        identifier: 'LOBE-10966',
+        title: 'Other user issue title',
+        url: 'https://linear.app/lobehub/issue/LOBE-10966/shared-issue',
       },
-      sourceToolCallId: 'tool-call-linear-other-comment',
-      toolName: 'save_comment',
+      sourceToolCallId: 'tool-call-linear-other-issue',
+      toolName: 'save_issue',
       topicId: otherTopicId,
     });
 
     expect(ownerWork?.id).not.toBe(otherWork?.id);
 
-    await otherWorkModel.handleLinearToolResult({
-      args: { id: 'shared-comment' },
-      data: { id: 'shared-comment' },
-      sourceToolCallId: 'tool-call-linear-other-comment-delete',
-      toolName: 'delete_comment',
-      topicId: otherTopicId,
-    });
-
     const ownerItems = await workModel.listByConversation({ topicId });
     const otherItems = await otherWorkModel.listByConversation({ topicId: otherTopicId });
     expect(ownerItems).toHaveLength(1);
     expect(ownerItems[0]).toMatchObject({
-      resourceId: 'shared-comment',
+      id: ownerWork!.id,
+      resourceId: 'shared-issue-uuid',
+      title: 'Owner issue title',
       type: 'linear',
     });
-    expect(otherItems).toHaveLength(0);
+    expect(otherItems).toHaveLength(1);
+    expect(otherItems[0]).toMatchObject({
+      id: otherWork!.id,
+      title: 'Other user issue title',
+      type: 'linear',
+    });
   });
 
   it('does not let another user register someone else task', async () => {

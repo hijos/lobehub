@@ -1,6 +1,5 @@
 import type {
   DeleteDocumentWorkParams,
-  DeleteLinearWorkParams,
   DocumentWorkContextVersionItem,
   DocumentWorkListItem,
   DocumentWorkSummaryItem,
@@ -208,18 +207,12 @@ export class WorkModel {
       linear: {
         assignee: pick('assignee', params.assignee, null),
         assigneeId: pick('assigneeId', params.assigneeId, null),
-        body: pick('body', params.body, null),
         color: pick('color', params.color, null),
         content: pick('content', params.content, null),
         createdAt: pick('createdAt', params.createdAt, null),
         description: pick('description', params.description, null),
         dueDate: pick('dueDate', params.dueDate, null),
-        entityType:
-          params.resourceType === 'linear_issue'
-            ? 'issue'
-            : params.resourceType === 'linear_document'
-              ? 'document'
-              : 'comment',
+        entityType: params.resourceType === 'linear_issue' ? 'issue' : 'document',
         id: params.resourceId,
         icon: pick('icon', params.icon, null),
         identifier: pick('identifier', params.resourceIdentifier, null),
@@ -728,11 +721,6 @@ export class WorkModel {
     const operation = normalizeLinearToolResult(params);
     if (!operation) return null;
 
-    if (operation.type === 'delete') {
-      await this.deleteLinearWork(operation.params);
-      return null;
-    }
-
     return this.registerLinear(operation.params);
   };
 
@@ -748,18 +736,6 @@ export class WorkModel {
       .delete(works)
       .where(
         and(this.ownership(), eq(works.resourceType, 'document'), eq(works.resourceId, doc.id)),
-      );
-  };
-
-  deleteLinearWork = async (params: DeleteLinearWorkParams): Promise<void> => {
-    await this.db
-      .delete(works)
-      .where(
-        and(
-          this.ownership(),
-          eq(works.resourceType, params.resourceType),
-          eq(works.resourceId, params.resourceId),
-        ),
       );
   };
 

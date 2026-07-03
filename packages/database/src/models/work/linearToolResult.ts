@@ -1,5 +1,4 @@
 import type {
-  DeleteLinearWorkParams,
   LinearWorkEntityType,
   LinearWorkPatchField,
   LinearWorkResourceType,
@@ -7,12 +6,7 @@ import type {
   RegisterLinearWorkParams,
 } from '@lobechat/types';
 
-const LINEAR_CREATE_TOOLS = new Set([
-  'create_document',
-  'save_comment',
-  'save_document',
-  'save_issue',
-]);
+const LINEAR_CREATE_TOOLS = new Set(['create_document', 'save_document', 'save_issue']);
 const LINEAR_ISSUE_IDENTIFIER_PATTERN = /^[A-Z][A-Z0-9]+-\d+$/u;
 const MAX_LINEAR_SNAPSHOT_TEXT_LENGTH = 4000;
 
@@ -21,12 +15,7 @@ interface LinearToolRegisterOperation {
   type: 'register';
 }
 
-interface LinearToolDeleteOperation {
-  params: DeleteLinearWorkParams;
-  type: 'delete';
-}
-
-export type LinearToolWorkOperation = LinearToolDeleteOperation | LinearToolRegisterOperation;
+export type LinearToolWorkOperation = LinearToolRegisterOperation;
 
 const toRecord = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === 'object' && !Array.isArray(value)
@@ -339,17 +328,9 @@ const resolveResourceIdentifier = (params: {
   entityType: LinearWorkEntityType;
   id: string;
   record: Record<string, unknown>;
-  targetIdentifier: string | null;
   url: string | null;
 }) => {
   switch (params.entityType) {
-    case 'comment': {
-      return (
-        fromRecord(params.record, ['identifier', 'key']) ??
-        (params.targetIdentifier ? `${params.targetIdentifier}#${params.id.slice(0, 8)}` : null)
-      );
-    }
-
     case 'document': {
       return (
         fromRecord(params.record, ['slug']) ??
@@ -370,9 +351,6 @@ const resolveResourceIdentifier = (params: {
 
 const linearResourceType = (entityType: LinearWorkEntityType): LinearWorkResourceType => {
   switch (entityType) {
-    case 'comment': {
-      return 'linear_comment';
-    }
     case 'document': {
       return 'linear_document';
     }
@@ -414,17 +392,9 @@ const createRegisterOperation = (
   if (!id) return null;
 
   const url = fromRecord(record, ['url', 'appUrl']);
-  const title =
-    optionalStringFromRecord(record, ['title', 'name', 'subject']) ??
-    (entityType === 'comment' ? optionalTextFromRecord(record, ['body']) : undefined);
+  const title = optionalStringFromRecord(record, ['title', 'name', 'subject']);
   const target = resolveTarget(params, record);
-  const identifier = resolveResourceIdentifier({
-    entityType,
-    id,
-    record,
-    targetIdentifier: target.targetIdentifier,
-    url,
-  });
+  const identifier = resolveResourceIdentifier({ entityType, id, record, url });
   const patchFields = new Set<LinearWorkPatchField>();
   const patch = <T>(field: LinearWorkPatchField, value: T | null | undefined) => {
     if (value !== undefined) patchFields.add(field);
@@ -455,7 +425,6 @@ const createRegisterOperation = (
           optionalStringFromNestedRecord(record, 'assignee', ['id']),
         ),
       ),
-      body: patch('body', optionalTextFromRecord(record, ['body'])),
       color: patch('color', optionalStringFromRecord(record, ['color'])),
       content: patch('content', optionalTextFromRecord(record, ['content'])),
       createdAt: patch('createdAt', optionalStringFromRecord(record, ['createdAt'])),
@@ -547,19 +516,6 @@ export const normalizeLinearToolResult = (
   if (isApplicationError(params.data)) return null;
 
   switch (params.toolName) {
-    case 'delete_comment': {
-      const id = stringValue(params.args?.id);
-      if (!id) return null;
-
-      return {
-        params: {
-          resourceId: id,
-          resourceType: 'linear_comment',
-        },
-        type: 'delete',
-      };
-    }
-
     case 'save_issue': {
       const issue = unwrapData(params.data, ['issue', 'data', 'result']);
       return issue ? createRegisterOperation(params, 'issue', issue) : null;
@@ -570,11 +526,6 @@ export const normalizeLinearToolResult = (
     case 'update_document': {
       const document = unwrapData(params.data, ['document', 'data', 'result']);
       return document ? createRegisterOperation(params, 'document', document) : null;
-    }
-
-    case 'save_comment': {
-      const comment = unwrapData(params.data, ['comment', 'data', 'result']);
-      return comment ? createRegisterOperation(params, 'comment', comment) : null;
     }
 
     default: {

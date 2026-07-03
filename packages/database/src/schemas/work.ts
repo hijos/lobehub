@@ -34,19 +34,36 @@ export const works = pgTable(
       .primaryKey()
       .$defaultFn(() => idGenerator('works'))
       .notNull(),
+    /** Display title, kept in sync with the latest version's title on upsert. */
     title: text('title').notNull(),
+    /** Provider domain of the Work: 'task' | 'document' | 'linear' | 'github'. */
     type: text('type').$type<WorkType>().notNull(),
+    /** Lifecycle state; only 'draft' is produced today, reserved for publish/archive flows. */
     status: text('status').$type<WorkStatus>().notNull().default('draft'),
+    /** Sharing scope; only 'private' is produced today, reserved for workspace/public sharing. */
     visibility: text('visibility').$type<WorkVisibility>().notNull().default('private'),
+    /**
+     * Latest `work_versions` row. Soft reference (no FK): work_versions.workId
+     * already references works, so a real FK here would create a circular
+     * dependency between the two tables.
+     */
     currentVersionId: text('current_version_id'),
 
+    /** Fine-grained resource kind, e.g. 'task' | 'linear_issue' | 'github_pull_request'. */
     resourceType: text('resource_type').$type<WorkResourceType>().notNull(),
+    /**
+     * Stable dedup key of the underlying resource within (resourceType, user/workspace).
+     * task: task id; linear: issue identifier or document id; github: `owner/repo#number`
+     * (the gh CLI surface never returns a node_id, so both github surfaces share this key).
+     */
     resourceId: text('resource_id').notNull(),
+    /** Human-readable external identifier for display, e.g. `LOBE-123` or `owner/repo#456`. */
     resourceIdentifier: text('resource_identifier'),
 
     userId: text('user_id')
       .references(() => users.id, { onDelete: 'cascade' })
       .notNull(),
+    /** Null for personal Works; determines which resource unique index applies below. */
     workspaceId: text('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
 
     createdAt: createdAt(),
@@ -81,13 +98,25 @@ export const workVersions = pgTable(
     workId: text('work_id')
       .references(() => works.id, { onDelete: 'cascade' })
       .notNull(),
+    /** 1-based sequence within a Work, unique per (workId, version). */
     version: integer('version').notNull(),
+    /** Title at the time this version was captured. */
     title: text('title').notNull(),
+    /** Which renderer displays this version, e.g. 'task_snapshot' | 'github_snapshot'. */
     renderType: text('render_type').$type<WorkRenderType>().notNull(),
+    /** How `contentRef` should be resolved ('file' | 'storage' | 'url'); null for inline snapshots. */
     contentRefType: text('content_ref_type').$type<WorkContentRefType>(),
+    /** Pointer to externally stored content; unused in the MVP where content lives in `snapshot`. */
     contentRef: text('content_ref'),
+    /**
+     * Normalized, white-listed resource fields (never raw connector payloads).
+     * Partial tool results are patch-merged over the previous version's snapshot
+     * using the normalizer's `patchFields`.
+     */
     snapshot: jsonb('snapshot').$type<WorkVersionSnapshot>().notNull(),
+    /** Preview image URL for gallery-style rendering. */
     thumbnail: text('thumbnail'),
+    /** Version annotations, e.g. a human-readable change summary. */
     metadata: jsonb('metadata').$type<WorkVersionMetadata>(),
     /**
      * Cumulative operation cost in USD when this version is produced.
@@ -121,11 +150,16 @@ export const workContexts = pgTable(
     workId: text('work_id')
       .references(() => works.id, { onDelete: 'cascade' })
       .notNull(),
+    /** Version produced by this event; null for events that did not change content. */
     versionId: text('version_id').references(() => workVersions.id, { onDelete: 'set null' }),
+    /** How the Work was involved: 'created' | 'updated' | 'referenced' | 'used_as_context' | 'published'. */
     role: text('role').$type<WorkContextRole>().notNull(),
+    /** What kind of actor produced the event: 'tool' | 'user' | 'system' | 'import'. */
     sourceType: text('source_type').$type<WorkSourceType>().notNull(),
+    /** Concrete source within `sourceType`, e.g. the tool name for sourceType='tool'. */
     source: text('source').notNull(),
 
+    /** Conversation where the event happened; set-null keeps Work history after topic deletion. */
     topicId: text('topic_id').references(() => topics.id, { onDelete: 'set null' }),
     threadId: text('thread_id').references(() => threads.id, { onDelete: 'set null' }),
     /**

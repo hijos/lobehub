@@ -7,7 +7,7 @@ import type { ToolExecutionContext } from '../types';
 const mocks = vi.hoisted(() => ({
   apiHandler: vi.fn(),
   executeLobehubSkill: vi.fn(),
-  handleLinearToolResult: vi.fn(),
+  handleSkillToolResult: vi.fn(),
 }));
 const mockApiHandler = mocks.apiHandler;
 
@@ -18,7 +18,7 @@ vi.mock('../serverRuntimes', () => ({
 
 vi.mock('@/database/models/work', () => ({
   WorkModel: vi.fn().mockImplementation(() => ({
-    handleLinearToolResult: mocks.handleLinearToolResult,
+    handleSkillToolResult: mocks.handleSkillToolResult,
   })),
 }));
 vi.mock('@/server/services/composio', () => ({
@@ -61,7 +61,7 @@ describe('BuiltinToolsExecutor truncated arguments', () => {
   beforeEach(() => {
     mockApiHandler.mockReset();
     mocks.executeLobehubSkill.mockReset();
-    mocks.handleLinearToolResult.mockReset();
+    mocks.handleSkillToolResult.mockReset();
   });
 
   it('short-circuits with TRUNCATED_ARGUMENTS when JSON is cut mid-object', async () => {
@@ -235,7 +235,7 @@ describe('BuiltinToolsExecutor truncated arguments', () => {
       provider: 'linear',
       toolName: 'save_issue',
     });
-    expect(mocks.handleLinearToolResult).toHaveBeenCalledWith({
+    expect(mocks.handleSkillToolResult).toHaveBeenCalledWith({
       actorAgentId: 'agent-1',
       args: { id: 'LOBE-10966', state: 'In Progress' },
       data: {
@@ -244,6 +244,7 @@ describe('BuiltinToolsExecutor truncated arguments', () => {
         title: 'Linear Work issue',
         url: 'https://linear.app/lobehub/issue/LOBE-10966/linear-work-issue',
       },
+      provider: 'linear',
       rootOperationId: 'op-root',
       sourceMessageId: 'msg-tool-linear',
       sourceToolCallId: 'tool-call-linear',
@@ -251,5 +252,69 @@ describe('BuiltinToolsExecutor truncated arguments', () => {
       toolName: 'save_issue',
       topicId: 'topic-1',
     });
+  });
+
+  it('registers GitHub Work after a successful server-side LobeHub Skill tool call', async () => {
+    mocks.executeLobehubSkill.mockResolvedValueOnce({
+      content: JSON.stringify({
+        html_url: 'https://github.com/lobehub/lobehub/issues/123',
+        node_id: 'I_kwDOJj1234',
+        number: 123,
+        state: 'open',
+        title: 'GitHub Work issue',
+      }),
+      success: true,
+    });
+
+    const result = await executor.execute(
+      {
+        apiName: 'create_issue',
+        arguments: '{"owner":"lobehub","repo":"lobehub","title":"GitHub Work issue"}',
+        id: 'tool-call-github',
+        identifier: 'github',
+        source: 'lobehubSkill',
+        type: 'default' as any,
+      },
+      {
+        ...context,
+        rootOperationId: 'op-root',
+        serverDB: {} as NonNullable<ToolExecutionContext['serverDB']>,
+        toolCallId: 'tool-call-github',
+        toolMessageId: 'msg-tool-github',
+        topicId: 'topic-1',
+        userId: 'user-1',
+      },
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.handleSkillToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'github',
+        sourceToolCallId: 'tool-call-github',
+        toolName: 'create_issue',
+      }),
+    );
+  });
+
+  it('does not register Work for non-adapted skill providers', async () => {
+    mocks.executeLobehubSkill.mockResolvedValueOnce({
+      content: JSON.stringify({ id: 'msg-1' }),
+      success: true,
+    });
+
+    const result = await executor.execute(
+      {
+        apiName: 'send_message',
+        arguments: '{}',
+        id: 'tool-call-ms',
+        identifier: 'microsoft',
+        source: 'lobehubSkill',
+        type: 'default' as any,
+      },
+      { ...context, topicId: 'topic-1' },
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.handleSkillToolResult).not.toHaveBeenCalled();
   });
 });

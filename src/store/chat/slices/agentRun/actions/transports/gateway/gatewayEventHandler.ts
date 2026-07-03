@@ -13,7 +13,7 @@ import type {
   ConversationContext,
   UIChatMessage,
 } from '@lobechat/types';
-import { AgentRuntimeErrorType } from '@lobechat/types';
+import { AgentRuntimeErrorType, isWorkSkillProvider } from '@lobechat/types';
 import { isRecord, pickNonEmptyString, toRecord } from '@lobechat/utils/object';
 
 import { messageService } from '@/services/message';
@@ -780,14 +780,14 @@ export const createGatewayEventHandler = (
             maybeRefresh,
             dispatchOnAfterCall(data, context.topicId ?? undefined).catch(console.error),
           ]);
-          // Server-executed Linear tools register Works on the server
-          // (BuiltinToolsExecutor), so no client-side mutation ever invalidates
-          // the work SWR caches — the Works sidebar (list + version history)
-          // would stay frozen at its mount-time snapshot. Revalidate the whole
-          // work domain here; `mutate` only refetches currently-mounted keys,
-          // so this is a no-op when no work UI is open.
+          // Server-executed skill tools (Linear/GitHub) register Works on the
+          // server (BuiltinToolsExecutor), so no client-side mutation ever
+          // invalidates the work SWR caches — the Works sidebar (list + version
+          // history) would stay frozen at its mount-time snapshot. Revalidate
+          // the whole work domain here; `mutate` only refetches currently-
+          // mounted keys, so this is a no-op when no work UI is open.
           const identity = readToolPayload(unwrapToolPayload(data?.payload));
-          if (identity?.identifier === 'linear') {
+          if (isWorkSkillProvider(identity?.identifier)) {
             await workService.refreshAll().catch(console.error);
           }
         });

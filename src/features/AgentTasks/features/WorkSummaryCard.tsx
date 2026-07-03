@@ -1,6 +1,7 @@
 'use client';
 
 import type { WorkSummaryItem } from '@lobechat/types';
+import { Github } from '@lobehub/icons';
 import { Flexbox, Text } from '@lobehub/ui';
 import { createStaticStyles } from 'antd-style';
 import { ClipboardListIcon, FileTextIcon } from 'lucide-react';
@@ -68,12 +69,21 @@ const WorkSummaryCard = memo<WorkSummaryCardProps>(({ className, item }) => {
   const title = item.version?.title || item.title;
   const isDocument = item.type === 'document';
   const isLinear = item.type === 'linear';
+  const isGithub = item.type === 'github';
   const description = isDocument
     ? item.document.description?.trim()
     : isLinear
       ? (item.linear.description || item.linear.content || item.linear.status)?.trim()
-      : item.task.description?.trim();
-  const Icon = isDocument ? FileTextIcon : isLinear ? LinearIcon : ClipboardListIcon;
+      : isGithub
+        ? (item.github.body || item.github.state)?.trim()
+        : item.task.description?.trim();
+  const Icon = isDocument
+    ? FileTextIcon
+    : isLinear
+      ? LinearIcon
+      : isGithub
+        ? Github
+        : ClipboardListIcon;
   const handleOpen = () => {
     if (isDocument) {
       openDocument(item.document.id, item.context.metadata?.agentDocumentId);
@@ -82,6 +92,11 @@ const WorkSummaryCard = memo<WorkSummaryCardProps>(({ className, item }) => {
 
     if (isLinear) {
       if (item.linear.url) window.open(item.linear.url, '_blank', 'noopener,noreferrer');
+      return;
+    }
+
+    if (isGithub) {
+      if (item.github.url) window.open(item.github.url, '_blank', 'noopener,noreferrer');
       return;
     }
 

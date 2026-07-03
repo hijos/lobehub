@@ -4,14 +4,20 @@ import type {
   DocumentWorkListItem,
   DocumentWorkSummaryItem,
   DocumentWorkVersionSnapshot,
+  GithubWorkContextVersionItem,
+  GithubWorkListItem,
+  GithubWorkPatchField,
+  GithubWorkSummaryItem,
+  GithubWorkVersionSnapshot,
   LinearWorkContextVersionItem,
   LinearWorkListItem,
   LinearWorkPatchField,
   LinearWorkSummaryItem,
   LinearWorkVersionSnapshot,
   RegisterDocumentWorkParams,
-  RegisterLinearToolResultWorkParams,
+  RegisterGithubWorkParams,
   RegisterLinearWorkParams,
+  RegisterSkillToolResultWorkParams,
   RegisterTaskWorkParams,
   TaskItem,
   TaskWorkContextVersionItem,
@@ -39,6 +45,7 @@ import { tasks } from '../schemas/task';
 import { workContexts, works, workVersions } from '../schemas/work';
 import type { LobeChatDatabase } from '../type';
 import { buildWorkspaceWhere } from '../utils/workspace';
+import { normalizeGithubToolResult } from './work/githubToolResult';
 import { normalizeLinearToolResult } from './work/linearToolResult';
 
 const MAX_VERSION_CREATE_RETRIES = 5;
@@ -65,6 +72,13 @@ interface LinearWorkSummaryQueryRow {
   context: typeof workContexts.$inferSelect;
   linear: LinearWorkVersionSnapshot;
   version: LinearWorkSummaryItem['version'];
+  work: WorkItem;
+}
+
+interface GithubWorkSummaryQueryRow {
+  context: typeof workContexts.$inferSelect;
+  github: GithubWorkVersionSnapshot;
+  version: GithubWorkSummaryItem['version'];
   work: WorkItem;
 }
 
@@ -239,6 +253,43 @@ export class WorkModel {
     };
   };
 
+  private githubSnapshot = (
+    params: Omit<RegisterGithubWorkParams, 'resourceId'> & { resourceId: string },
+    previous?: GithubWorkVersionSnapshot | null,
+  ): { github: GithubWorkVersionSnapshot } => {
+    const patchFields = new Set(params.patchFields ?? []);
+    // GitHub update responses can be partial (e.g. merge results); keep prior fields.
+    const pick = <T>(field: GithubWorkPatchField, value: T | null | undefined, fallback: T) =>
+      patchFields.has(field)
+        ? (value ?? fallback)
+        : ((previous?.[field] as T | undefined) ?? fallback);
+
+    return {
+      github: {
+        assignees: pick('assignees', params.assignees, []),
+        author: pick('author', params.author, null),
+        baseRef: pick('baseRef', params.baseRef, null),
+        body: pick('body', params.body, null),
+        closedAt: pick('closedAt', params.closedAt, null),
+        createdAt: pick('createdAt', params.createdAt, null),
+        draft: pick('draft', params.draft, null),
+        entityType: params.resourceType === 'github_issue' ? 'issue' : 'pull_request',
+        headRef: pick('headRef', params.headRef, null),
+        id: params.resourceId,
+        labels: pick('labels', params.labels, []),
+        merged: pick('merged', params.merged, null),
+        mergedAt: pick('mergedAt', params.mergedAt, null),
+        number: pick('number', params.number, null),
+        repo: pick('repo', params.repo, null),
+        state: pick('state', params.state, null),
+        stateReason: pick('stateReason', params.stateReason, null),
+        title: pick('title', params.title, null),
+        updatedAt: pick('updatedAt', params.updatedAt, null),
+        url: pick('url', params.url, null),
+      } satisfies GithubWorkVersionSnapshot,
+    };
+  };
+
   private resolveTask = async (params: RegisterTaskWorkParams): Promise<TaskItem | null> => {
     const filters: SQL[] = [];
     const taskId = normalizeTaskLookup(params.taskId);
@@ -309,6 +360,15 @@ export class WorkModel {
     fallbackTitle?.trim() ||
     params.resourceIdentifier?.trim() ||
     `${params.resourceType.replace('linear_', 'Linear ')} ${params.resourceId}`;
+
+  private githubTitle = (
+    params: Omit<RegisterGithubWorkParams, 'resourceId'> & { resourceId: string },
+    fallbackTitle?: string | null,
+  ) =>
+    params.title?.trim() ||
+    fallbackTitle?.trim() ||
+    params.resourceIdentifier?.trim() ||
+    `${params.resourceType === 'github_issue' ? 'GitHub issue' : 'GitHub pull request'} ${params.resourceId}`;
 
   private upsertTaskWork = async (task: TaskItem, title: string): Promise<WorkItem> => {
     const values = {
@@ -423,6 +483,47 @@ export class WorkModel {
     return work;
   };
 
+  private upsertGithubWork = async (
+    params: Omit<RegisterGithubWorkParams, 'resourceId'> & { resourceId: string },
+  ): Promise<WorkItem> => {
+    const insertTitle = this.githubTitle(params);
+    const updateTitle = params.patchFields?.includes('title') ? params.title?.trim() || null : null;
+    const values = {
+      resourceId: params.resourceId,
+      resourceIdentifier: params.resourceIdentifier ?? null,
+      resourceType: params.resourceType,
+      title: insertTitle,
+      type: 'github' as const,
+      userId: this.userId,
+      workspaceId: this.workspaceId ?? null,
+    };
+
+    const conflict = this.workspaceId
+      ? {
+          target: [works.workspaceId, works.resourceType, works.resourceId],
+          targetWhere: isNotNull(works.workspaceId),
+        }
+      : {
+          target: [works.resourceType, works.resourceId, works.userId],
+          targetWhere: isNull(works.workspaceId),
+        };
+
+    const [work] = await this.db
+      .insert(works)
+      .values(values)
+      .onConflictDoUpdate({
+        ...conflict,
+        set: {
+          resourceIdentifier: sql`COALESCE(${params.resourceIdentifier ?? null}, ${works.resourceIdentifier})`,
+          title: sql`COALESCE(${updateTitle}, ${works.title})`,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+
+    return work;
+  };
+
   private findById = async (workId: string): Promise<WorkItem | null> => {
     const [work] = await this.db
       .select()
@@ -469,6 +570,21 @@ export class WorkModel {
       .limit(1);
 
     return row?.linear ?? null;
+  };
+
+  private findCurrentGithubSnapshot = async (
+    workId: string,
+  ): Promise<GithubWorkVersionSnapshot | null> => {
+    const [row] = await this.db
+      .select({
+        github: sql<GithubWorkVersionSnapshot>`${workVersions.snapshot}->'github'`,
+      })
+      .from(works)
+      .innerJoin(workVersions, eq(works.currentVersionId, workVersions.id))
+      .where(and(eq(works.id, workId), this.ownership(), eq(works.type, 'github')))
+      .limit(1);
+
+    return row?.github ?? null;
   };
 
   private createTaskVersion = async (
@@ -686,6 +802,77 @@ export class WorkModel {
     throw new Error('Failed to create linear work version after max retries');
   };
 
+  private createGithubVersion = async (
+    work: WorkItem,
+    params: Omit<RegisterGithubWorkParams, 'resourceId'> & { resourceId: string },
+  ): Promise<WorkVersionItem> => {
+    const existing = await this.findVersionBySourceToolCall(work.id, params.sourceToolCallId);
+    if (existing) return existing;
+
+    const previousSnapshot = await this.findCurrentGithubSnapshot(work.id);
+    const snapshot = this.githubSnapshot(params, previousSnapshot);
+    const title = snapshot.github.title?.trim() || work.title;
+
+    for (let attempt = 0; attempt < MAX_VERSION_CREATE_RETRIES; attempt += 1) {
+      try {
+        return await this.db.transaction(async (tx) => {
+          const now = new Date();
+          const [next] = await tx
+            .select({
+              version: sql<number>`COALESCE(MAX(${workVersions.version}), 0) + 1`,
+            })
+            .from(workVersions)
+            .where(eq(workVersions.workId, work.id));
+
+          const [version] = await tx
+            .insert(workVersions)
+            .values({
+              contentRefType: 'inline_snapshot',
+              renderType: 'github_snapshot',
+              snapshot,
+              title,
+              version: Number(next.version),
+              workId: work.id,
+            })
+            .returning();
+
+          await tx.insert(workContexts).values({
+            actorAgentId: params.actorAgentId ?? null,
+            role: params.role,
+            rootOperationId: params.rootOperationId ?? null,
+            source: params.source,
+            sourceMessageId: params.sourceMessageId ?? null,
+            sourceToolCallId: params.sourceToolCallId ?? null,
+            sourceType: params.sourceType ?? 'tool',
+            threadId: params.threadId ?? null,
+            topicId: params.topicId ?? null,
+            userId: this.userId,
+            versionId: version.id,
+            workId: work.id,
+            workspaceId: this.workspaceId ?? null,
+          });
+
+          await tx
+            .update(works)
+            .set({ currentVersionId: version.id, title, updatedAt: now })
+            .where(and(eq(works.id, work.id), this.ownership()));
+
+          return version;
+        });
+      } catch (error) {
+        if (!isUniqueViolation(error) || attempt === MAX_VERSION_CREATE_RETRIES - 1) throw error;
+
+        const existingAfterConflict = await this.findVersionBySourceToolCall(
+          work.id,
+          params.sourceToolCallId,
+        );
+        if (existingAfterConflict) return existingAfterConflict;
+      }
+    }
+
+    throw new Error('Failed to create github work version after max retries');
+  };
+
   registerTask = async (params: RegisterTaskWorkParams): Promise<WorkItem | null> => {
     const task = await this.resolveTask(params);
     if (!task) return null;
@@ -715,13 +902,75 @@ export class WorkModel {
     return this.findById(work.id);
   };
 
-  handleLinearToolResult = async (
-    params: RegisterLinearToolResultWorkParams,
+  registerGithub = async (
+    params: Omit<RegisterGithubWorkParams, 'resourceId'> & { resourceId: string },
   ): Promise<WorkItem | null> => {
-    const operation = normalizeLinearToolResult(params);
+    const work = await this.upsertGithubWork(params);
+    await this.createGithubVersion(work, params);
+
+    return this.findById(work.id);
+  };
+
+  /**
+   * Append a version to an existing GitHub work matched by `owner/repo#number`.
+   * Used when a tool result lacks a stable GitHub id — a new Work row is never
+   * created in that case (LOBE-10967 acceptance criteria).
+   */
+  private appendGithubByIdentifier = async (
+    params: Omit<RegisterGithubWorkParams, 'resourceId'> & { resourceIdentifier: string },
+  ): Promise<WorkItem | null> => {
+    const [work] = await this.db
+      .select()
+      .from(works)
+      .where(
+        and(
+          this.ownership(),
+          eq(works.type, 'github'),
+          eq(works.resourceType, params.resourceType),
+          eq(works.resourceIdentifier, params.resourceIdentifier),
+        ),
+      )
+      .orderBy(desc(works.updatedAt))
+      .limit(1);
+    if (!work) return null;
+
+    await this.createGithubVersion(work, { ...params, resourceId: work.resourceId });
+
+    return this.findById(work.id);
+  };
+
+  private handleGithubToolResult = async (
+    params: Omit<RegisterSkillToolResultWorkParams, 'provider'>,
+  ): Promise<WorkItem | null> => {
+    const operation = normalizeGithubToolResult(params);
     if (!operation) return null;
 
-    return this.registerLinear(operation.params);
+    return operation.type === 'register'
+      ? this.registerGithub(operation.params)
+      : this.appendGithubByIdentifier(operation.params);
+  };
+
+  handleSkillToolResult = async (
+    params: RegisterSkillToolResultWorkParams,
+  ): Promise<WorkItem | null> => {
+    const { provider, ...rest } = params;
+
+    switch (provider) {
+      case 'github': {
+        return this.handleGithubToolResult(rest);
+      }
+
+      case 'linear': {
+        const operation = normalizeLinearToolResult(rest);
+        if (!operation) return null;
+
+        return this.registerLinear(operation.params);
+      }
+
+      default: {
+        return null;
+      }
+    }
   };
 
   deleteDocumentWork = async (params: DeleteDocumentWorkParams): Promise<void> => {
@@ -922,6 +1171,47 @@ export class WorkModel {
     }));
   };
 
+  private listGithubContextVersions = async (
+    filters: SQL[],
+    limit = 20,
+  ): Promise<GithubWorkContextVersionItem[]> => {
+    const rows = await this.db
+      .select({
+        context: workContexts,
+        github: sql<GithubWorkVersionSnapshot>`${workVersions.snapshot}->'github'`,
+        version: {
+          createdAt: workVersions.createdAt,
+          cumulativeCost: workVersions.cumulativeCost,
+          id: workVersions.id,
+          title: workVersions.title,
+          version: workVersions.version,
+        },
+        work: works,
+      })
+      .from(workContexts)
+      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
+      .innerJoin(workVersions, eq(workContexts.versionId, workVersions.id))
+      .where(
+        and(
+          this.contextOwnership(),
+          ...filters,
+          inArray(workContexts.role, VERSION_CONTEXT_ROLES),
+          eq(works.type, 'github'),
+        ),
+      )
+      .orderBy(desc(workContexts.createdAt))
+      .limit(limit);
+
+    return rows.map((row) => ({
+      ...row.work,
+      context: this.toWorkContext(row.context),
+      github: row.github,
+      resourceType: row.work.resourceType as GithubWorkListItem['resourceType'],
+      type: 'github' as const,
+      version: row.version,
+    }));
+  };
+
   listByRootOperation = async (params: {
     limit?: number;
     rootOperationId?: string | null;
@@ -950,12 +1240,13 @@ export class WorkModel {
     const entries = await Promise.all(
       rootOperationIds.map(async (rootOperationId) => {
         const filters = [eq(workContexts.rootOperationId, rootOperationId)];
-        const [taskItems, documentItems, linearItems] = await Promise.all([
+        const [taskItems, documentItems, linearItems, githubItems] = await Promise.all([
           this.listTaskContextVersions(filters, limit),
           this.listDocumentContextVersions(filters, limit),
           this.listLinearContextVersions(filters, limit),
+          this.listGithubContextVersions(filters, limit),
         ]);
-        const items = [...taskItems, ...documentItems, ...linearItems]
+        const items = [...taskItems, ...documentItems, ...linearItems, ...githubItems]
           .sort((a, b) => b.context.createdAt.getTime() - a.context.createdAt.getTime())
           .slice(0, limit);
 
@@ -1140,6 +1431,52 @@ export class WorkModel {
     }));
   };
 
+  private listGithubWorkSummaryRows = async (
+    filters: SQL[],
+    rowLimit: number,
+  ): Promise<GithubWorkSummaryQueryRow[]> =>
+    this.db
+      .select({
+        context: workContexts,
+        github: sql<GithubWorkVersionSnapshot>`${workVersions.snapshot}->'github'`,
+        version: {
+          createdAt: workVersions.createdAt,
+          id: workVersions.id,
+          title: workVersions.title,
+          version: workVersions.version,
+        },
+        work: works,
+      })
+      .from(workContexts)
+      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
+      .innerJoin(workVersions, eq(works.currentVersionId, workVersions.id))
+      .where(
+        and(
+          this.contextOwnership(),
+          ...filters,
+          inArray(workContexts.role, VERSION_CONTEXT_ROLES),
+          eq(works.type, 'github'),
+        ),
+      )
+      .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
+      .limit(rowLimit);
+
+  private toGithubWorkSummaries = async (
+    rows: GithubWorkSummaryQueryRow[],
+  ): Promise<GithubWorkSummaryItem[]> => {
+    const costByWorkId = await this.getTotalCostByWorkIds(rows.map((row) => row.work.id));
+
+    return rows.map((row) => ({
+      ...row.work,
+      context: this.toWorkContext(row.context),
+      github: row.github,
+      resourceType: row.work.resourceType as GithubWorkSummaryItem['resourceType'],
+      totalCost: costByWorkId.get(row.work.id) ?? null,
+      type: 'github' as const,
+      version: row.version,
+    }));
+  };
+
   private latestSummaryItemsByWork = (items: WorkSummaryItem[], limit?: number) => {
     const seen = new Set<string>();
     const latestItems: WorkSummaryItem[] = [];
@@ -1169,16 +1506,18 @@ export class WorkModel {
     const limit = params.limit ?? 20;
     const filters = [inArray(workContexts.rootOperationId, rootOperationIds)];
     const rowLimit = rootOperationIds.length * limit * 4;
-    const [taskRows, documentRows, linearRows] = await Promise.all([
+    const [taskRows, documentRows, linearRows, githubRows] = await Promise.all([
       this.listTaskWorkSummaryRows(filters, rowLimit),
       this.listDocumentWorkSummaryRows(filters, rowLimit),
       this.listLinearWorkSummaryRows(filters, rowLimit),
+      this.listGithubWorkSummaryRows(filters, rowLimit),
     ]);
     const summaries = this.latestSummaryItemsByWork(
       [
         ...(await this.toTaskWorkSummaries(taskRows)),
         ...(await this.toDocumentWorkSummaries(documentRows)),
         ...(await this.toLinearWorkSummaries(linearRows)),
+        ...(await this.toGithubWorkSummaries(githubRows)),
       ].sort((a, b) => b.context.createdAt.getTime() - a.context.createdAt.getTime()),
     );
 
@@ -1204,10 +1543,11 @@ export class WorkModel {
       ? eq(workContexts.threadId, params.threadId)
       : isNull(workContexts.threadId);
     const filters = [eq(workContexts.topicId, params.topicId), threadFilter];
-    const [taskRows, documentRows, linearRows] = await Promise.all([
+    const [taskRows, documentRows, linearRows, githubRows] = await Promise.all([
       this.listTaskWorkSummaryRows(filters, limit * 4),
       this.listDocumentWorkSummaryRows(filters, limit * 4),
       this.listLinearWorkSummaryRows(filters, limit * 4),
+      this.listGithubWorkSummaryRows(filters, limit * 4),
     ]);
 
     return this.latestSummaryItemsByWork(
@@ -1215,6 +1555,7 @@ export class WorkModel {
         ...(await this.toTaskWorkSummaries(taskRows)),
         ...(await this.toDocumentWorkSummaries(documentRows)),
         ...(await this.toLinearWorkSummaries(linearRows)),
+        ...(await this.toGithubWorkSummaries(githubRows)),
       ].sort((a, b) => b.context.createdAt.getTime() - a.context.createdAt.getTime()),
       limit,
     );
@@ -1297,6 +1638,26 @@ export class WorkModel {
       .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
       .limit(limit * 4);
 
+    const githubRows = await this.db
+      .select({
+        contextCreatedAt: workContexts.createdAt,
+        github: sql<GithubWorkVersionSnapshot>`${workVersions.snapshot}->'github'`,
+        work: works,
+      })
+      .from(workContexts)
+      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
+      .innerJoin(workVersions, eq(works.currentVersionId, workVersions.id))
+      .where(
+        and(
+          this.contextOwnership(),
+          eq(workContexts.topicId, params.topicId),
+          threadFilter,
+          eq(works.type, 'github'),
+        ),
+      )
+      .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
+      .limit(limit * 4);
+
     const seen = new Set<string>();
     const items: WorkListItem[] = [];
     const rows = [
@@ -1330,6 +1691,15 @@ export class WorkModel {
           resourceType: row.work.resourceType as LinearWorkListItem['resourceType'],
           type: 'linear' as const,
         } satisfies LinearWorkListItem,
+      })),
+      ...githubRows.map((row) => ({
+        contextCreatedAt: row.contextCreatedAt,
+        item: {
+          ...row.work,
+          github: row.github,
+          resourceType: row.work.resourceType as GithubWorkListItem['resourceType'],
+          type: 'github' as const,
+        } satisfies GithubWorkListItem,
       })),
     ].sort((a, b) => b.contextCreatedAt.getTime() - a.contextCreatedAt.getTime());
 

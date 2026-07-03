@@ -1,5 +1,5 @@
 import type {
-  RegisterLinearToolResultWorkParams,
+  RegisterSkillToolResultWorkParams,
   RegisterTaskWorkParams,
   UpdateWorkVersionCumulativeUsageParams,
   WorkVersionCumulativeUsage,
@@ -43,17 +43,18 @@ const registerTaskSchema = z.object({
   topicId: z.string().nullable().optional(),
 }) satisfies z.ZodType<RegisterTaskWorkParams>;
 
-const registerLinearToolResultSchema = z.object({
+const registerSkillToolResultSchema = z.object({
   actorAgentId: z.string().nullable().optional(),
   args: z.record(z.unknown()).optional(),
   data: z.unknown().optional(),
+  provider: z.string().min(1),
   rootOperationId: z.string().nullable().optional(),
   sourceMessageId: z.string().nullable().optional(),
   sourceToolCallId: z.string().nullable().optional(),
   threadId: z.string().nullable().optional(),
   toolName: z.string().min(1),
   topicId: z.string().nullable().optional(),
-}) satisfies z.ZodType<RegisterLinearToolResultWorkParams>;
+}) satisfies z.ZodType<RegisterSkillToolResultWorkParams>;
 
 const cumulativeUsageSchema = z.object({
   capturedAt: z.string(),
@@ -139,9 +140,9 @@ export const workRouter = router({
     .input(registerTaskSchema)
     .mutation(async ({ ctx, input }) => ctx.workModel.registerTask(input)),
 
-  handleLinearToolResult: workProcedureWrite
-    .input(registerLinearToolResultSchema)
-    .mutation(async ({ ctx, input }) => ctx.workModel.handleLinearToolResult(input)),
+  handleSkillToolResult: workProcedureWrite
+    .input(registerSkillToolResultSchema)
+    .mutation(async ({ ctx, input }) => ctx.workModel.handleSkillToolResult(input)),
 
   updateVersionCumulativeUsage: workProcedureWrite
     .input(updateVersionCumulativeUsageSchema)

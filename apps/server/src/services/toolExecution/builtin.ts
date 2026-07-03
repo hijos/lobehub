@@ -1,6 +1,6 @@
 import { builtinTools } from '@lobechat/builtin-tools';
 import { type LobeChatDatabase } from '@lobechat/database';
-import { type ChatToolPayload } from '@lobechat/types';
+import { type ChatToolPayload, isWorkSkillProvider } from '@lobechat/types';
 import { detectTruncatedJSON, safeParseJSON } from '@lobechat/utils';
 import debug from 'debug';
 
@@ -114,17 +114,18 @@ export class BuiltinToolsExecutor implements IToolExecutor {
         toolName: apiName,
       });
 
-      if (result.success && identifier === 'linear') {
+      if (result.success && isWorkSkillProvider(identifier)) {
         try {
           const workModel = new WorkModel(
             context.serverDB ?? this.db,
             context.userId ?? this.userId,
             context.workspaceId,
           );
-          await workModel.handleLinearToolResult({
+          await workModel.handleSkillToolResult({
             actorAgentId: context.agentId ?? null,
             args,
             data: safeParseJSON(result.content) ?? result.content,
+            provider: identifier,
             rootOperationId: context.rootOperationId ?? context.operationId,
             sourceMessageId: context.toolMessageId,
             sourceToolCallId: context.toolCallId,
@@ -133,7 +134,7 @@ export class BuiltinToolsExecutor implements IToolExecutor {
             topicId: context.topicId,
           });
         } catch (error) {
-          console.error('Failed to register Linear Work for %s:%s: %O', identifier, apiName, error);
+          console.error('Failed to register Work for %s:%s: %O', identifier, apiName, error);
         }
       }
 

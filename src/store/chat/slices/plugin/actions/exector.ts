@@ -1,3 +1,5 @@
+import { isWorkSkillProvider } from '@lobechat/types';
+
 import { type MCPToolCallResult } from '@/libs/mcp';
 import { workService } from '@/services/work';
 import { useToolStore } from '@/store/tool';
@@ -101,12 +103,13 @@ export const lobehubSkillExecutor: RemoteToolExecutor = async (p, context) => {
     );
   }
 
-  if (provider === 'linear') {
+  if (isWorkSkillProvider(provider)) {
     try {
-      await workService.handleLinearToolResult({
+      await workService.handleSkillToolResult({
         actorAgentId: context?.agentId,
         args,
         data: result.data,
+        provider,
         rootOperationId: context?.rootOperationId,
         sourceMessageId: context?.sourceMessageId,
         sourceToolCallId: context?.sourceToolCallId,
@@ -115,7 +118,7 @@ export const lobehubSkillExecutor: RemoteToolExecutor = async (p, context) => {
         topicId: context?.topicId,
       });
     } catch (error) {
-      console.error('[LobehubSkill] Failed to register Linear Work:', error);
+      console.error('[LobehubSkill] Failed to register %s Work:', provider, error);
     }
   }
 

@@ -5,6 +5,7 @@ import type {
   WorkSummaryItem,
   WorkVersionListItem,
 } from '@lobechat/types';
+import { Github } from '@lobehub/icons';
 import { ActionIcon, Center, Empty, Flexbox, Text } from '@lobehub/ui';
 import { createStaticStyles } from 'antd-style';
 import {
@@ -314,11 +315,52 @@ const LinearWorkVersionHistoryCard = memo<{ work: Extract<WorkListItem, { type: 
 
 LinearWorkVersionHistoryCard.displayName = 'LinearWorkVersionHistoryCard';
 
+const GithubWorkVersionHistoryCard = memo<{ work: Extract<WorkListItem, { type: 'github' }> }>(
+  ({ work }) => {
+    const [expanded, setExpanded] = useState(true);
+    const ToggleIcon = expanded ? ChevronDownIcon : ChevronRightIcon;
+    const label = work.resourceIdentifier ?? work.resourceId;
+
+    return (
+      <Flexbox className={styles.workCard}>
+        <Flexbox
+          horizontal
+          align={'center'}
+          className={styles.header}
+          gap={8}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          <ToggleIcon size={16} />
+          <Github className={styles.context} size={16} />
+          <Text className={styles.context} style={{ flexShrink: 0 }}>
+            {label}
+          </Text>
+          <Text
+            ellipsis
+            className={styles.title}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (work.github.url) window.open(work.github.url, '_blank', 'noopener,noreferrer');
+            }}
+          >
+            {work.title}
+          </Text>
+        </Flexbox>
+        {expanded && <VersionList workId={work.id} />}
+      </Flexbox>
+    );
+  },
+);
+
+GithubWorkVersionHistoryCard.displayName = 'GithubWorkVersionHistoryCard';
+
 const WorkVersionHistoryCard = memo<{ work: WorkListItem }>(({ work }) =>
   work.type === 'document' ? (
     <DocumentWorkVersionHistoryCard work={work} />
   ) : work.type === 'linear' ? (
     <LinearWorkVersionHistoryCard work={work} />
+  ) : work.type === 'github' ? (
+    <GithubWorkVersionHistoryCard work={work} />
   ) : (
     <TaskWorkVersionHistoryCard work={work} />
   ),

@@ -1,11 +1,14 @@
 import type { TaskAutomationMode, TaskStatus } from './task';
 
-export type WorkType = 'document' | 'linear' | 'task';
+export type WorkType = 'document' | 'github' | 'linear' | 'task';
 export type WorkStatus = 'archived' | 'draft' | 'published';
 export type WorkVisibility = 'private' | 'public' | 'workspace';
 export type LinearWorkResourceType = 'linear_document' | 'linear_issue';
-export type WorkResourceType = 'document' | LinearWorkResourceType | 'task';
-export type WorkRenderType = 'document_snapshot' | 'linear_snapshot' | 'task_snapshot';
+export type GithubWorkResourceType = 'github_issue' | 'github_pull_request';
+export type WorkResourceType =
+  'document' | GithubWorkResourceType | LinearWorkResourceType | 'task';
+export type WorkRenderType =
+  'document_snapshot' | 'github_snapshot' | 'linear_snapshot' | 'task_snapshot';
 export type WorkContentRefType = 'file' | 'inline_snapshot' | 'storage' | 'url';
 export type WorkContextRole =
   'created' | 'published' | 'referenced' | 'updated' | 'used_as_context';
@@ -82,9 +85,39 @@ export interface LinearWorkVersionSnapshot {
 
 export type LinearWorkPatchField = keyof Omit<LinearWorkVersionSnapshot, 'entityType' | 'id'>;
 
+export type GithubWorkEntityType = 'issue' | 'pull_request';
+
+export interface GithubWorkVersionSnapshot {
+  assignees: string[];
+  author: string | null;
+  baseRef: string | null;
+  body: string | null;
+  closedAt: string | null;
+  createdAt: string | null;
+  draft: boolean | null;
+  entityType: GithubWorkEntityType;
+  headRef: string | null;
+  id: string;
+  labels: string[];
+  merged: boolean | null;
+  mergedAt: string | null;
+  number: number | null;
+  repo: string | null;
+  state: string | null;
+  stateReason: string | null;
+  title: string | null;
+  updatedAt: string | null;
+  url: string | null;
+}
+
+export type GithubWorkPatchField = keyof Omit<GithubWorkVersionSnapshot, 'entityType' | 'id'>;
+
 export type WorkVersionSnapshot =
   | {
       document: DocumentWorkVersionSnapshot;
+    }
+  | {
+      github: GithubWorkVersionSnapshot;
     }
   | {
       linear: LinearWorkVersionSnapshot;
@@ -180,7 +213,14 @@ export interface LinearWorkListItem extends WorkItem {
   type: 'linear';
 }
 
-export type WorkListItem = DocumentWorkListItem | LinearWorkListItem | TaskWorkListItem;
+export interface GithubWorkListItem extends WorkItem {
+  github: GithubWorkVersionSnapshot;
+  resourceType: GithubWorkResourceType;
+  type: 'github';
+}
+
+export type WorkListItem =
+  DocumentWorkListItem | GithubWorkListItem | LinearWorkListItem | TaskWorkListItem;
 
 export type WorkContextPreview = Pick<
   WorkContextItem,
@@ -210,8 +250,16 @@ export interface LinearWorkContextVersionItem extends LinearWorkListItem {
   version: Pick<WorkVersionItem, 'createdAt' | 'cumulativeCost' | 'id' | 'title' | 'version'>;
 }
 
+export interface GithubWorkContextVersionItem extends GithubWorkListItem {
+  context: WorkContextPreview;
+  version: Pick<WorkVersionItem, 'createdAt' | 'cumulativeCost' | 'id' | 'title' | 'version'>;
+}
+
 export type WorkContextVersionItem =
-  DocumentWorkContextVersionItem | LinearWorkContextVersionItem | TaskWorkContextVersionItem;
+  | DocumentWorkContextVersionItem
+  | GithubWorkContextVersionItem
+  | LinearWorkContextVersionItem
+  | TaskWorkContextVersionItem;
 export type TaskWorkContextVersionMap = Record<string, TaskWorkContextVersionItem[]>;
 export type WorkContextVersionMap = Record<string, WorkContextVersionItem[]>;
 
@@ -233,7 +281,14 @@ export interface LinearWorkSummaryItem extends LinearWorkListItem {
   version: Pick<WorkVersionItem, 'createdAt' | 'id' | 'title' | 'version'> | null;
 }
 
-export type WorkSummaryItem = DocumentWorkSummaryItem | LinearWorkSummaryItem | TaskWorkSummaryItem;
+export interface GithubWorkSummaryItem extends GithubWorkListItem {
+  context: WorkContextPreview;
+  totalCost: number | null;
+  version: Pick<WorkVersionItem, 'createdAt' | 'id' | 'title' | 'version'> | null;
+}
+
+export type WorkSummaryItem =
+  DocumentWorkSummaryItem | GithubWorkSummaryItem | LinearWorkSummaryItem | TaskWorkSummaryItem;
 export type TaskWorkSummaryMap = Record<string, TaskWorkSummaryItem[]>;
 export type WorkSummaryMap = Record<string, WorkSummaryItem[]>;
 
@@ -311,10 +366,56 @@ export interface RegisterLinearWorkParams {
   url?: string | null;
 }
 
-export interface RegisterLinearToolResultWorkParams {
+export interface RegisterGithubWorkParams {
+  actorAgentId?: string | null;
+  assignees?: string[];
+  author?: string | null;
+  baseRef?: string | null;
+  body?: string | null;
+  closedAt?: string | null;
+  createdAt?: string | null;
+  draft?: boolean | null;
+  headRef?: string | null;
+  labels?: string[];
+  merged?: boolean | null;
+  mergedAt?: string | null;
+  number?: number | null;
+  patchFields?: GithubWorkPatchField[];
+  repo?: string | null;
+  resourceId: string;
+  resourceIdentifier?: string | null;
+  resourceType: GithubWorkResourceType;
+  role: Extract<WorkContextRole, 'created' | 'updated'>;
+  rootOperationId?: string | null;
+  source: string;
+  sourceMessageId?: string | null;
+  sourceToolCallId?: string | null;
+  sourceType?: WorkSourceType;
+  state?: string | null;
+  stateReason?: string | null;
+  threadId?: string | null;
+  title?: string | null;
+  topicId?: string | null;
+  updatedAt?: string | null;
+  url?: string | null;
+}
+
+/**
+ * LobeHub Skill providers whose tool results are adapted into the Work
+ * registry. Client executors and the server BuiltinToolsExecutor both gate on
+ * this list before calling `handleSkillToolResult`.
+ */
+export const WORK_SKILL_PROVIDERS = ['github', 'linear'] as const;
+export type WorkSkillProvider = (typeof WORK_SKILL_PROVIDERS)[number];
+
+export const isWorkSkillProvider = (provider?: string | null): provider is WorkSkillProvider =>
+  !!provider && (WORK_SKILL_PROVIDERS as readonly string[]).includes(provider);
+
+export interface RegisterSkillToolResultWorkParams {
   actorAgentId?: string | null;
   args?: Record<string, unknown>;
   data?: unknown;
+  provider: string;
   rootOperationId?: string | null;
   sourceMessageId?: string | null;
   sourceToolCallId?: string | null;
@@ -322,6 +423,16 @@ export interface RegisterLinearToolResultWorkParams {
   toolName: string;
   topicId?: string | null;
 }
+
+export type RegisterLinearToolResultWorkParams = Omit<
+  RegisterSkillToolResultWorkParams,
+  'provider'
+>;
+
+export type RegisterGithubToolResultWorkParams = Omit<
+  RegisterSkillToolResultWorkParams,
+  'provider'
+>;
 
 export interface RegisterTaskWorkParams {
   actorAgentId?: string | null;

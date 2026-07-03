@@ -2,6 +2,8 @@
 import type {
   DocumentWorkSummaryItem,
   DocumentWorkVersionSnapshot,
+  GithubWorkSummaryItem,
+  GithubWorkVersionSnapshot,
   LinearWorkSummaryItem,
   LinearWorkVersionSnapshot,
   TaskWorkSummaryItem,
@@ -93,6 +95,26 @@ const expectLinearSummaryItem = (item?: WorkSummaryItem): LinearWorkSummaryItem 
 
   if (!item || item.type !== 'linear') {
     throw new Error('Expected linear work summary');
+  }
+
+  return item;
+};
+
+const expectGithubSnapshot = (snapshot: WorkVersionSnapshot): GithubWorkVersionSnapshot => {
+  expect(snapshot).toHaveProperty('github');
+
+  if (!('github' in snapshot)) {
+    throw new Error('Expected github work snapshot');
+  }
+
+  return snapshot.github;
+};
+
+const expectGithubSummaryItem = (item?: WorkSummaryItem): GithubWorkSummaryItem => {
+  expect(item).toBeDefined();
+
+  if (!item || item.type !== 'github') {
+    throw new Error('Expected github work summary');
   }
 
   return item;
@@ -698,7 +720,8 @@ describe('WorkModel', () => {
   it('registers Linear issue creates and appends versions for edits', async () => {
     const workModel = new WorkModel(serverDB, userId);
 
-    const first = await workModel.handleLinearToolResult({
+    const first = await workModel.handleSkillToolResult({
+      provider: 'linear',
       args: { team: 'Engineering', title: 'Linear Work issue' },
       data: {
         description: 'Track Linear issue as Work',
@@ -719,7 +742,8 @@ describe('WorkModel', () => {
       topicId,
     });
 
-    const second = await workModel.handleLinearToolResult({
+    const second = await workModel.handleSkillToolResult({
+      provider: 'linear',
       args: { id: 'issue-uuid-10966', state: 'In Progress' },
       data: {
         id: 'issue-uuid-10966',
@@ -732,7 +756,8 @@ describe('WorkModel', () => {
       toolName: 'save_issue',
       topicId,
     });
-    const replay = await workModel.handleLinearToolResult({
+    const replay = await workModel.handleSkillToolResult({
+      provider: 'linear',
       args: { id: 'issue-uuid-10966', state: 'In Progress' },
       data: {
         id: 'issue-uuid-10966',
@@ -804,13 +829,15 @@ describe('WorkModel', () => {
       type: 'linear',
     });
 
-    await workModel.handleLinearToolResult({
+    await workModel.handleSkillToolResult({
+      provider: 'linear',
       data: { id: 'issue-uuid-read', title: 'Read only' },
       sourceToolCallId: 'tool-call-linear-read',
       toolName: 'get_issue',
       topicId,
     });
-    await workModel.handleLinearToolResult({
+    await workModel.handleSkillToolResult({
+      provider: 'linear',
       data: { error: 'Invalid issue', isError: true },
       sourceToolCallId: 'tool-call-linear-error',
       toolName: 'save_issue',
@@ -827,7 +854,8 @@ describe('WorkModel', () => {
   it('registers Linear documents and keeps merged snapshots across partial updates', async () => {
     const workModel = new WorkModel(serverDB, userId);
 
-    const document = await workModel.handleLinearToolResult({
+    const document = await workModel.handleSkillToolResult({
+      provider: 'linear',
       args: { title: 'Linear document', team: 'Engineering' },
       data: JSON.stringify({
         document: {
@@ -843,7 +871,8 @@ describe('WorkModel', () => {
       toolName: 'create_document',
       topicId,
     });
-    const editedDocument = await workModel.handleLinearToolResult({
+    const editedDocument = await workModel.handleSkillToolResult({
+      provider: 'linear',
       args: { content: 'Updated body', id: 'doc-1' },
       data: {
         content: 'Updated body',
@@ -857,7 +886,8 @@ describe('WorkModel', () => {
       toolName: 'save_document',
       topicId,
     });
-    const partialDocumentUpdate = await workModel.handleLinearToolResult({
+    const partialDocumentUpdate = await workModel.handleSkillToolResult({
+      provider: 'linear',
       args: { content: 'Partial body', id: 'doc-1' },
       data: {
         content: 'Partial body',
@@ -871,7 +901,8 @@ describe('WorkModel', () => {
 
     // Comments are intentionally NOT adapted as Work entities — a comment
     // mutation must neither create its own work nor touch the parent issue.
-    const comment = await workModel.handleLinearToolResult({
+    const comment = await workModel.handleSkillToolResult({
+      provider: 'linear',
       args: { body: 'Looks good', issueId: 'LOBE-10966' },
       data: {
         body: 'Looks good',
@@ -915,7 +946,8 @@ describe('WorkModel', () => {
       identifier: 'linear-document-8298fa69b2e3',
     });
 
-    await workModel.handleLinearToolResult({
+    await workModel.handleSkillToolResult({
+      provider: 'linear',
       args: { id: 'comment-1' },
       data: { id: 'comment-1' },
       sourceToolCallId: 'tool-call-linear-comment-delete',
@@ -932,6 +964,228 @@ describe('WorkModel', () => {
     expect(documentWork).toHaveLength(1);
   });
 
+  it('registers GitHub issue creates and appends versions for edits', async () => {
+    const workModel = new WorkModel(serverDB, userId);
+
+    const first = await workModel.handleSkillToolResult({
+      provider: 'github',
+      args: { owner: 'lobehub', repo: 'lobehub', title: 'GitHub Work issue' },
+      data: {
+        assignees: [{ login: 'arvinxx' }],
+        body: 'Track GitHub issue as Work',
+        html_url: 'https://github.com/lobehub/lobehub/issues/123',
+        id: 3_001,
+        labels: [{ name: 'enhancement' }],
+        node_id: 'I_kwDOJj1234',
+        number: 123,
+        state: 'open',
+        title: 'GitHub Work issue',
+        updated_at: '2026-07-02T08:00:00Z',
+        user: { login: 'yutengjing' },
+      },
+      rootOperationId: 'op-github-issue-create',
+      sourceToolCallId: 'tool-call-github-issue-create',
+      toolName: 'create_issue',
+      topicId,
+    });
+
+    const second = await workModel.handleSkillToolResult({
+      provider: 'github',
+      args: { issue_number: 123, owner: 'lobehub', repo: 'lobehub', state: 'closed' },
+      data: {
+        html_url: 'https://github.com/lobehub/lobehub/issues/123',
+        node_id: 'I_kwDOJj1234',
+        number: 123,
+        state: 'closed',
+        state_reason: 'completed',
+        updated_at: '2026-07-02T09:30:00Z',
+      },
+      rootOperationId: 'op-github-issue-edit',
+      sourceToolCallId: 'tool-call-github-issue-edit',
+      toolName: 'update_issue',
+      topicId,
+    });
+    const replay = await workModel.handleSkillToolResult({
+      provider: 'github',
+      args: { issue_number: 123, owner: 'lobehub', repo: 'lobehub', state: 'closed' },
+      data: {
+        node_id: 'I_kwDOJj1234',
+        number: 123,
+        state: 'closed',
+      },
+      rootOperationId: 'op-github-issue-edit',
+      sourceToolCallId: 'tool-call-github-issue-edit',
+      toolName: 'update_issue',
+      topicId,
+    });
+
+    expect(second?.id).toBe(first?.id);
+    expect(replay?.id).toBe(first?.id);
+    expect(second).toMatchObject({
+      resourceId: 'I_kwDOJj1234',
+      resourceIdentifier: 'lobehub/lobehub#123',
+      resourceType: 'github_issue',
+      title: 'GitHub Work issue',
+      type: 'github',
+    });
+
+    const versions = await workModel.listVersions(first!.id);
+    expect(versions.map((item) => item.version)).toEqual([2, 1]);
+    expect(versions[0].context?.role).toBe('updated');
+    // Partial update responses keep prior snapshot fields (title/body/labels).
+    expect(expectGithubSnapshot(versions[0].snapshot)).toMatchObject({
+      assignees: ['arvinxx'],
+      author: 'yutengjing',
+      body: 'Track GitHub issue as Work',
+      entityType: 'issue',
+      id: 'I_kwDOJj1234',
+      labels: ['enhancement'],
+      number: 123,
+      repo: 'lobehub/lobehub',
+      state: 'closed',
+      stateReason: 'completed',
+      title: 'GitHub Work issue',
+      updatedAt: '2026-07-02T09:30:00Z',
+      url: 'https://github.com/lobehub/lobehub/issues/123',
+    });
+    expect(expectGithubSnapshot(versions[1].snapshot).state).toBe('open');
+
+    const byOperation = await workModel.listSummariesByRootOperations({
+      rootOperationIds: ['op-github-issue-create', 'op-github-issue-edit'],
+    });
+    expect(byOperation['op-github-issue-create']).toEqual([]);
+    const issueSummary = expectGithubSummaryItem(byOperation['op-github-issue-edit']?.[0]);
+    expect(issueSummary.github).toMatchObject({
+      entityType: 'issue',
+      repo: 'lobehub/lobehub',
+      state: 'closed',
+    });
+
+    const byConversation = await workModel.listByConversation({ topicId });
+    expect(byConversation).toHaveLength(1);
+    expect(byConversation[0]).toMatchObject({
+      github: expect.objectContaining({ entityType: 'issue' }),
+      resourceType: 'github_issue',
+      type: 'github',
+    });
+
+    // Read-only queries and failed results never register Works.
+    await workModel.handleSkillToolResult({
+      provider: 'github',
+      data: { node_id: 'I_kwDOJjRead', number: 200, title: 'Read only' },
+      sourceToolCallId: 'tool-call-github-read',
+      toolName: 'get_issue',
+      topicId,
+    });
+    await workModel.handleSkillToolResult({
+      provider: 'github',
+      data: { error: 'Validation failed', isError: true },
+      sourceToolCallId: 'tool-call-github-error',
+      toolName: 'create_issue',
+      topicId,
+    });
+
+    const workRows = await serverDB
+      .select()
+      .from(works)
+      .where(eq(works.resourceType, 'github_issue'));
+    expect(workRows).toHaveLength(1);
+  });
+
+  it('registers GitHub pull requests and appends id-less updates by identifier', async () => {
+    const workModel = new WorkModel(serverDB, userId);
+
+    const pullRequest = await workModel.handleSkillToolResult({
+      provider: 'github',
+      args: { base: 'canary', head: 'feat/work-registry', owner: 'lobehub', repo: 'lobehub' },
+      data: JSON.stringify({
+        base: { ref: 'canary', repo: { full_name: 'lobehub/lobehub' } },
+        body: 'Adds the Work registry',
+        draft: false,
+        head: { ref: 'feat/work-registry' },
+        html_url: 'https://github.com/lobehub/lobehub/pull/456',
+        id: 9_001,
+        merged: false,
+        node_id: 'PR_kwDOJj5678',
+        number: 456,
+        state: 'open',
+        title: 'feat: add work registry',
+        user: { login: 'yutengjing' },
+      }),
+      rootOperationId: 'op-github-pr-create',
+      sourceToolCallId: 'tool-call-github-pr-create',
+      toolName: 'create_pull_request',
+      topicId,
+    });
+
+    expect(pullRequest).toMatchObject({
+      resourceId: 'PR_kwDOJj5678',
+      resourceIdentifier: 'lobehub/lobehub#456',
+      resourceType: 'github_pull_request',
+      title: 'feat: add work registry',
+      type: 'github',
+    });
+
+    // Merge-style responses carry no stable id; the target resolves through
+    // `owner/repo#number` and appends a version to the existing Work.
+    const merged = await workModel.handleSkillToolResult({
+      provider: 'github',
+      args: { owner: 'lobehub', pull_number: 456, repo: 'lobehub' },
+      data: {
+        merged: true,
+        message: 'Pull Request successfully merged',
+        sha: 'abc123def456',
+      },
+      rootOperationId: 'op-github-pr-merge',
+      sourceToolCallId: 'tool-call-github-pr-merge',
+      toolName: 'update_pull_request',
+      topicId,
+    });
+
+    expect(merged?.id).toBe(pullRequest?.id);
+
+    const versions = await workModel.listVersions(pullRequest!.id);
+    expect(versions.map((item) => item.version)).toEqual([2, 1]);
+    expect(expectGithubSnapshot(versions[0].snapshot)).toMatchObject({
+      baseRef: 'canary',
+      body: 'Adds the Work registry',
+      entityType: 'pull_request',
+      headRef: 'feat/work-registry',
+      merged: true,
+      number: 456,
+      repo: 'lobehub/lobehub',
+      title: 'feat: add work registry',
+    });
+
+    // An id-less result with no matching Work must not create a new row.
+    const unknownTarget = await workModel.handleSkillToolResult({
+      provider: 'github',
+      args: { owner: 'lobehub', pull_number: 999, repo: 'lobehub' },
+      data: { merged: true, sha: 'fff000' },
+      sourceToolCallId: 'tool-call-github-pr-unknown',
+      toolName: 'update_pull_request',
+      topicId,
+    });
+    expect(unknownTarget).toBeNull();
+
+    // A result with neither a stable id nor a resolvable identifier is skipped.
+    const unresolvable = await workModel.handleSkillToolResult({
+      provider: 'github',
+      args: {},
+      data: { merged: true },
+      sourceToolCallId: 'tool-call-github-pr-unresolvable',
+      toolName: 'update_pull_request',
+      topicId,
+    });
+    expect(unresolvable).toBeNull();
+
+    const workRows = await serverDB
+      .select()
+      .from(works)
+      .where(eq(works.resourceType, 'github_pull_request'));
+    expect(workRows).toHaveLength(1);
+  });
+
   it('keeps Linear works isolated by user for the same external resource', async () => {
     const otherTopicId = 'work-test-other-linear-topic-id';
     await serverDB.insert(topics).values({ id: otherTopicId, userId: userId2 });
@@ -939,7 +1193,8 @@ describe('WorkModel', () => {
     const workModel = new WorkModel(serverDB, userId);
     const otherWorkModel = new WorkModel(serverDB, userId2);
 
-    const ownerWork = await workModel.handleLinearToolResult({
+    const ownerWork = await workModel.handleSkillToolResult({
+      provider: 'linear',
       args: { team: 'Engineering', title: 'Owner issue title' },
       data: {
         id: 'shared-issue-uuid',
@@ -951,7 +1206,8 @@ describe('WorkModel', () => {
       toolName: 'save_issue',
       topicId,
     });
-    const otherWork = await otherWorkModel.handleLinearToolResult({
+    const otherWork = await otherWorkModel.handleSkillToolResult({
+      provider: 'linear',
       args: { id: 'shared-issue-uuid', title: 'Other user issue title' },
       data: {
         id: 'shared-issue-uuid',

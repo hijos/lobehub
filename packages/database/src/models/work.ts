@@ -911,45 +911,6 @@ export class WorkModel {
     return this.findById(work.id);
   };
 
-  /**
-   * Append a version to an existing GitHub work matched by `owner/repo#number`.
-   * Used when a tool result lacks a stable GitHub id — a new Work row is never
-   * created in that case (LOBE-10967 acceptance criteria).
-   */
-  private appendGithubByIdentifier = async (
-    params: Omit<RegisterGithubWorkParams, 'resourceId'> & { resourceIdentifier: string },
-  ): Promise<WorkItem | null> => {
-    const [work] = await this.db
-      .select()
-      .from(works)
-      .where(
-        and(
-          this.ownership(),
-          eq(works.type, 'github'),
-          eq(works.resourceType, params.resourceType),
-          eq(works.resourceIdentifier, params.resourceIdentifier),
-        ),
-      )
-      .orderBy(desc(works.updatedAt))
-      .limit(1);
-    if (!work) return null;
-
-    await this.createGithubVersion(work, { ...params, resourceId: work.resourceId });
-
-    return this.findById(work.id);
-  };
-
-  private handleGithubToolResult = async (
-    params: Omit<RegisterSkillToolResultWorkParams, 'provider'>,
-  ): Promise<WorkItem | null> => {
-    const operation = normalizeGithubToolResult(params);
-    if (!operation) return null;
-
-    return operation.type === 'register'
-      ? this.registerGithub(operation.params)
-      : this.appendGithubByIdentifier(operation.params);
-  };
-
   handleSkillToolResult = async (
     params: RegisterSkillToolResultWorkParams,
   ): Promise<WorkItem | null> => {
@@ -957,7 +918,10 @@ export class WorkModel {
 
     switch (provider) {
       case 'github': {
-        return this.handleGithubToolResult(rest);
+        const operation = normalizeGithubToolResult(rest);
+        if (!operation) return null;
+
+        return this.registerGithub(operation.params);
       }
 
       case 'linear': {

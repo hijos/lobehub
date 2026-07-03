@@ -56,6 +56,9 @@ class WorkService {
     await Promise.all([
       this.refreshConversation(params.topicId, params.threadId),
       this.refreshRootOperation(params.rootOperationId),
+      // Expanded version-history lists subscribe per work id; without this the
+      // sidebar keeps showing the pre-mutation versions until a page refresh.
+      this.refreshVersions(work?.id),
     ]);
 
     return work;

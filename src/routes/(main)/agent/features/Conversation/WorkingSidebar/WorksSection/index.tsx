@@ -197,7 +197,7 @@ const VersionList = memo<{ workId: string }>(({ workId }) => {
 VersionList.displayName = 'VersionList';
 
 const TaskWorkVersionHistoryCard = memo<{ work: TaskWorkListItem }>(({ work }) => {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const openTaskDetail = useChatStore((s) => s.openTaskDetail);
   const status = toTaskStatus(work.task.status);
   const taskIdentifier = work.resourceIdentifier ?? work.resourceId;
@@ -238,7 +238,7 @@ TaskWorkVersionHistoryCard.displayName = 'TaskWorkVersionHistoryCard';
 
 const DocumentWorkVersionHistoryCard = memo<{ work: Extract<WorkListItem, { type: 'document' }> }>(
   ({ work }) => {
-    const [expanded, setExpanded] = useState(true);
+    const [expanded, setExpanded] = useState(false);
     const openDocument = useChatStore((s) => s.openDocument);
     const ToggleIcon = expanded ? ChevronDownIcon : ChevronRightIcon;
     const label = work.resourceIdentifier ?? work.resourceId;
@@ -278,7 +278,7 @@ DocumentWorkVersionHistoryCard.displayName = 'DocumentWorkVersionHistoryCard';
 
 const LinearWorkVersionHistoryCard = memo<{ work: Extract<WorkListItem, { type: 'linear' }> }>(
   ({ work }) => {
-    const [expanded, setExpanded] = useState(true);
+    const [expanded, setExpanded] = useState(false);
     const ToggleIcon = expanded ? ChevronDownIcon : ChevronRightIcon;
     const label = work.resourceIdentifier ?? work.resourceId;
 
@@ -317,7 +317,7 @@ LinearWorkVersionHistoryCard.displayName = 'LinearWorkVersionHistoryCard';
 
 const GithubWorkVersionHistoryCard = memo<{ work: Extract<WorkListItem, { type: 'github' }> }>(
   ({ work }) => {
-    const [expanded, setExpanded] = useState(true);
+    const [expanded, setExpanded] = useState(false);
     const ToggleIcon = expanded ? ChevronDownIcon : ChevronRightIcon;
     const label = work.resourceIdentifier ?? work.resourceId;
 

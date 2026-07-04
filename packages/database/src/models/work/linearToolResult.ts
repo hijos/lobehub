@@ -171,27 +171,6 @@ const fromRecord = (record: Record<string, unknown>, keys: string[]) => {
   return null;
 };
 
-const textFromRecord = (record: Record<string, unknown>, keys: string[]) => {
-  for (const key of keys) {
-    const value = snapshotText(record[key]);
-    if (value) return value;
-  }
-
-  return null;
-};
-
-const fromNestedRecord = (record: Record<string, unknown>, key: string, keys: string[]) =>
-  fromRecord(toRecord(record[key]) ?? {}, keys);
-
-const numberFromRecord = (record: Record<string, unknown>, keys: string[]) => {
-  for (const key of keys) {
-    const value = numberValue(record[key]);
-    if (value !== null) return value;
-  }
-
-  return null;
-};
-
 const extractLabels = (value: unknown): string[] => {
   if (!Array.isArray(value)) return [];
 

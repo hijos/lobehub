@@ -41,6 +41,11 @@ vi.mock('@/store/agent/selectors', () => ({
 }));
 vi.mock('@/store/global', () => ({ useGlobalStore: () => undefined }));
 vi.mock('@/store/electron', () => ({ useElectronStore: () => undefined }));
+vi.mock('@/store/chat', () => ({ useChatStore: () => undefined }));
+
+vi.mock('@/business/client/features/WorkingSidebarTabs', () => ({
+  useBusinessWorkingSidebarTabs: () => [],
+}));
 
 vi.mock('@/features/ChatInput/ControlBar/useRepoType', () => ({ useRepoType: () => undefined }));
 vi.mock('@/hooks/useEffectiveWorkingDirectory', () => ({

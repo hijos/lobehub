@@ -133,6 +133,35 @@ describe('LobeOpenAICompatibleFactory', () => {
       expect(result).toBeInstanceOf(Response);
     });
 
+    it('should not leak internal thinking param to generic OpenAI-compatible chat payloads', async () => {
+      const mockStream = new ReadableStream();
+
+      (instance['client'].chat.completions.create as Mock).mockResolvedValue(
+        Promise.resolve(mockStream),
+      );
+
+      await instance.chat({
+        messages: [{ content: 'Hello', role: 'user' }],
+        model: 'mistralai/mistral-7b-instruct:free',
+        reasoning_effort: 'high',
+        temperature: 0.7,
+        thinking: { budget_tokens: 1024, type: 'enabled' },
+      } as any);
+
+      expect(instance['client'].chat.completions.create).toHaveBeenCalledWith(
+        expect.not.objectContaining({
+          thinking: expect.anything(),
+        }),
+        expect.anything(),
+      );
+      expect(instance['client'].chat.completions.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reasoning_effort: 'high',
+        }),
+        expect.anything(),
+      );
+    });
+
     // MCP tool schemas with `items: true` or array props missing
     // `type` must be normalized before reaching the upstream validator.
     it('should normalize tool parameter schemas before sending to upstream', async () => {
@@ -1485,6 +1514,40 @@ describe('LobeOpenAICompatibleFactory', () => {
         },
         { timeout: 10000 },
       );
+
+      it('should preserve thinking for Responses API payloads', async () => {
+        const LobeMockProviderUseResponses = createOpenAICompatibleRuntime({
+          baseURL: 'https://api.test.com/v1',
+          chatCompletion: {
+            useResponse: true,
+          },
+          provider: ModelProvider.OpenAI,
+        });
+
+        const inst = new LobeMockProviderUseResponses({ apiKey: 'test' });
+        const mockResponsesCreate = vi
+          .spyOn(inst['client'].responses, 'create')
+          .mockResolvedValue({
+            output_text: 'ok',
+          } as any);
+
+        await inst.chat({
+          messages: [{ content: 'hi', role: 'user' }],
+          model: 'any-model',
+          reasoning_effort: 'high',
+          stream: false,
+          temperature: 0,
+          thinking: { budget_tokens: 1024, type: 'enabled' },
+        } as any);
+
+        expect(mockResponsesCreate).toHaveBeenCalledWith(
+          expect.objectContaining({
+            reasoning: { effort: 'high' },
+            thinking: { budget_tokens: 1024, type: 'enabled' },
+          }),
+          expect.anything(),
+        );
+      });
 
       it('should enable strictToolPairing when building Responses API input', async () => {
         const LobeMockProviderUseResponses = createOpenAICompatibleRuntime({

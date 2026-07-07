@@ -1567,6 +1567,14 @@ export const callLlm =
                 if (answerSalvagedFromReasoning) {
                   metadata.answerSalvagedFromReasoning = true;
                 }
+                // Work display anchor: Work cards render on the FINAL assistant
+                // message of a turn (stable across the two-round tool flow), so
+                // stamp `metadata.work` only when this LLM step ends the turn —
+                // i.e. it emits no new tool calls AND at least one tool ran
+                // earlier in this operation (messages after sourceMessageId, the
+                // triggering user message). Without the prior-tool check every
+                // plain answer would get a work anchor; without the slice the
+                // scan would see other turns' tool messages.
                 const sourceMessageId = state.metadata?.sourceMessageId;
                 const sourceMessageIndex =
                   typeof sourceMessageId === 'string'

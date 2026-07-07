@@ -12,7 +12,7 @@ import type {
   WorkVersionSnapshot,
 } from '@lobechat/types';
 import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getTestDB } from '../../core/getTestDB';
 import {
@@ -470,6 +470,171 @@ describe('WorkModel', () => {
     expect(byConversation[0].totalCost).toBeCloseTo(0.000_987, 6);
   });
 
+  it('does not double-count cumulative cost snapshots within the same operation', async () => {
+    const taskModel = new TaskModel(serverDB, userId);
+    const workModel = new WorkModel(serverDB, userId);
+    const task = await taskModel.create({ instruction: 'Cost', name: 'Cost task' });
+
+    await workModel.registerTask({
+      role: 'created',
+      rootOperationId: 'op-cost-same',
+      source: 'createTask',
+      sourceToolCallId: 'tool-call-cost-create',
+      taskId: task.id,
+      topicId,
+    });
+    await workModel.registerTask({
+      role: 'updated',
+      rootOperationId: 'op-cost-same',
+      source: 'editTask',
+      sourceToolCallId: 'tool-call-cost-edit',
+      taskId: task.id,
+      topicId,
+    });
+    await workModel.registerTask({
+      role: 'updated',
+      rootOperationId: 'op-cost-other',
+      source: 'editTask',
+      sourceToolCallId: 'tool-call-cost-other',
+      taskId: task.id,
+      topicId,
+    });
+
+    // cumulativeCost is the operation's running total: the edit's 0.016
+    // already contains the create's 0.01 (same operation), so the work's
+    // total is 0.016 + 0.005, not the 0.031 sum of all three snapshots.
+    await workModel.updateVersionCumulativeUsage({
+      cumulativeCost: 0.01,
+      rootOperationId: 'op-cost-same',
+      sourceToolCallId: 'tool-call-cost-create',
+    });
+    await workModel.updateVersionCumulativeUsage({
+      cumulativeCost: 0.016,
+      rootOperationId: 'op-cost-same',
+      sourceToolCallId: 'tool-call-cost-edit',
+    });
+    await workModel.updateVersionCumulativeUsage({
+      cumulativeCost: 0.005,
+      rootOperationId: 'op-cost-other',
+      sourceToolCallId: 'tool-call-cost-other',
+    });
+
+    const summaries = await workModel.listSummariesByRootOperations({
+      rootOperationIds: ['op-cost-other', 'op-cost-same'],
+    });
+    const summary = expectTaskSummaryItem(summaries['op-cost-other']?.[0]);
+    expect(summary.totalCost).toBeCloseTo(0.021, 6);
+  });
+
+  it('re-reads the current snapshot when a version-create retry follows a concurrent write', async () => {
+    const workModel = new WorkModel(serverDB, userId);
+    const baseParams = {
+      resourceId: 'issue-race',
+      resourceType: 'linear_issue' as const,
+      source: 'save_issue',
+      topicId,
+    };
+
+    const first = await workModel.registerLinear({
+      ...baseParams,
+      description: 'Original description',
+      patchFields: ['title', 'status', 'description'],
+      role: 'created',
+      rootOperationId: 'op-race-create',
+      sourceToolCallId: 'tool-call-race-create',
+      status: 'Backlog',
+      title: 'Original title',
+    });
+    expect(first).toBeDefined();
+
+    // Simulate losing the version-number race: the first insert attempt fails
+    // with a unique violation while a concurrent registration commits a
+    // version that renames the issue.
+    const originalTransaction = serverDB.transaction.bind(serverDB);
+    let raced = false;
+    const transactionSpy = vi
+      .spyOn(serverDB, 'transaction')
+      .mockImplementation(async (callback: never) => {
+        if (raced) return originalTransaction(callback);
+        raced = true;
+
+        await workModel.registerLinear({
+          ...baseParams,
+          patchFields: ['title'],
+          role: 'updated',
+          rootOperationId: 'op-race-winner',
+          sourceToolCallId: 'tool-call-race-winner',
+          title: 'Winner title',
+        });
+
+        throw new Error(
+          'duplicate key value violates unique constraint "work_versions_work_id_version_unique"',
+        );
+      });
+
+    try {
+      await workModel.registerLinear({
+        ...baseParams,
+        patchFields: ['status'],
+        role: 'updated',
+        rootOperationId: 'op-race-loser',
+        sourceToolCallId: 'tool-call-race-loser',
+        status: 'In Progress',
+      });
+    } finally {
+      transactionSpy.mockRestore();
+    }
+
+    const versions = await workModel.listVersions(first!.id);
+    expect(versions.map((item) => item.version)).toEqual([3, 2, 1]);
+
+    // Without re-reading inside the retry, the retried version would merge
+    // against the pre-race snapshot and revert the winner's committed title.
+    const latest = expectLinearSnapshot(versions[0].snapshot);
+    expect(latest.title).toBe('Winner title');
+    expect(latest.status).toBe('In Progress');
+    expect(latest.description).toBe('Original description');
+  });
+
+  it('batches listByRootOperations into one query per work type', async () => {
+    const taskModel = new TaskModel(serverDB, userId);
+    const workModel = new WorkModel(serverDB, userId);
+    const firstTask = await taskModel.create({ instruction: 'Batch 1', name: 'Batch one' });
+    const secondTask = await taskModel.create({ instruction: 'Batch 2', name: 'Batch two' });
+
+    await workModel.registerTask({
+      role: 'created',
+      rootOperationId: 'op-batch-1',
+      source: 'createTask',
+      sourceToolCallId: 'tool-call-batch-1',
+      taskId: firstTask.id,
+      topicId,
+    });
+    await workModel.registerTask({
+      role: 'created',
+      rootOperationId: 'op-batch-2',
+      source: 'createTask',
+      sourceToolCallId: 'tool-call-batch-2',
+      taskId: secondTask.id,
+      topicId,
+    });
+
+    const selectSpy = vi.spyOn(serverDB, 'select');
+    try {
+      const byOperations = await workModel.listByRootOperations({
+        rootOperationIds: ['op-batch-1', 'op-batch-2', 'op-batch-missing'],
+      });
+
+      // One query per work type across all ids, not per (id x type).
+      expect(selectSpy).toHaveBeenCalledTimes(4);
+      expect(byOperations['op-batch-1']?.map((item) => item.resourceId)).toEqual([firstTask.id]);
+      expect(byOperations['op-batch-2']?.map((item) => item.resourceId)).toEqual([secondTask.id]);
+      expect(byOperations['op-batch-missing']).toEqual([]);
+    } finally {
+      selectSpy.mockRestore();
+    }
+  });
+
   it('registers a document work using the backing document id', async () => {
     const agentDocumentModel = new AgentDocumentModel(serverDB, userId);
     const workModel = new WorkModel(serverDB, userId);
@@ -588,6 +753,40 @@ describe('WorkModel', () => {
     expect(byConversation[0]).toMatchObject({
       document: expect.objectContaining({ description: expectedDescription }),
     });
+  });
+
+  it('clamps the summary over-fetch limit while still returning results for large id batches', async () => {
+    const agentDocumentModel = new AgentDocumentModel(serverDB, userId);
+    const workModel = new WorkModel(serverDB, userId);
+    const doc = await agentDocumentModel.create(agentId, 'clamp.md', 'Clamp body', {
+      title: 'Clamp',
+    });
+
+    await workModel.registerDocument({
+      agentDocumentId: doc.id,
+      agentId,
+      documentId: doc.documentId,
+      role: 'created',
+      rootOperationId: 'op-doc-clamp',
+      source: 'createDocument',
+      sourceToolCallId: 'tool-call-doc-clamp',
+      title: doc.title,
+      topicId,
+    });
+
+    // 601 ids * limit 20 * fanout 4 far exceeds MAX_SUMMARY_ROW_LIMIT, so the
+    // query LIMIT is clamped — the real operation's summary must still surface.
+    const syntheticIds = Array.from({ length: 600 }, (_, index) => `op-doc-clamp-pad-${index}`);
+    const summaries = await workModel.listSummariesByRootOperations({
+      rootOperationIds: ['op-doc-clamp', ...syntheticIds],
+    });
+
+    expect(Object.keys(summaries)).toHaveLength(601);
+    expect(summaries['op-doc-clamp']).toHaveLength(1);
+    expect(summaries['op-doc-clamp'][0]).toMatchObject({
+      document: expect.objectContaining({ id: doc.documentId }),
+    });
+    expect(summaries[syntheticIds[0]]).toEqual([]);
   });
 
   it('keeps one document work row and appends versions for document edits', async () => {

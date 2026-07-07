@@ -1055,7 +1055,12 @@ export const createAgentExecutors = (context: {
         newState.usage = usage;
         if (cost) newState.cost = cost;
 
-        await updateWorkVersionCumulativeUsage({
+        // Best-effort bookkeeping (errors are swallowed inside the helper, and
+        // the args are captured synchronously) — fire without awaiting so every
+        // client tool call doesn't pay a network round trip + SWR revalidation
+        // before the agent can move to its next step. Matches the other Work
+        // call sites (gatewayEventHandler / plugin exector) which don't block.
+        void updateWorkVersionCumulativeUsage({
           rootOperationId: context.operationId,
           sourceToolCallId: chatToolPayload.id,
           state: newState,

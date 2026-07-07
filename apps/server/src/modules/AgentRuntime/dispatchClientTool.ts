@@ -111,9 +111,9 @@ export async function dispatchClientTool(
     await streamManager.sendToolExecute(operationId, {
       agentId: ctx.agentId,
       apiName: chatToolPayload.apiName,
+      arguments: chatToolPayload.arguments,
       assistantMessageId: ctx.assistantMessageId,
       documentId: ctx.documentId,
-      arguments: chatToolPayload.arguments,
       executionTimeoutMs: timeoutMs,
       groupId: ctx.groupId,
       identifier: chatToolPayload.identifier,

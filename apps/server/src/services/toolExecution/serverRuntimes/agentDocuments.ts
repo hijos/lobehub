@@ -1,28 +1,15 @@
 import type { DocumentLoadRule } from '@lobechat/agent-templates';
-import {
-  AgentDocumentsIdentifier,
-  buildAgentDocumentUrl,
-} from '@lobechat/builtin-tool-agent-documents';
+import { AgentDocumentsIdentifier } from '@lobechat/builtin-tool-agent-documents';
 import { AgentDocumentsExecutionRuntime } from '@lobechat/builtin-tool-agent-documents/executionRuntime';
 import { eq } from 'drizzle-orm';
 
 import { TaskModel } from '@/database/models/task';
-import { WorkModel } from '@/database/models/work';
-import { WorkspaceModel } from '@/database/models/workspace';
 import { tasks } from '@/database/schemas';
-import { appEnv } from '@/envs/app';
 import { AgentDocumentsService } from '@/server/services/agentDocuments';
+import { createDocumentWorkRegistrar } from '@/server/services/agentDocuments/documentWork';
 import { emitAgentDocumentToolOutcomeSafely } from '@/server/services/agentDocuments/toolOutcome';
 
 import { type ServerRuntimeRegistration } from './types';
-
-const getAgentDocumentAppUrl = (): string | undefined => {
-  try {
-    return appEnv.APP_URL;
-  } catch {
-    return process.env.APP_URL;
-  }
-};
 
 export const agentDocumentsRuntime: ServerRuntimeRegistration = {
   factory: (context) => {
@@ -38,9 +25,13 @@ export const agentDocumentsRuntime: ServerRuntimeRegistration = {
       context.workspaceId,
       context.agentVisibility,
     );
-    const workModel = new WorkModel(db, userId, context.workspaceId);
     const { taskId } = context;
-    let workspaceSlugPromise: Promise<string | undefined> | undefined;
+    const workRegistrar = createDocumentWorkRegistrar({
+      db,
+      logPrefix: '[agentDocumentsRuntime]',
+      userId,
+      workspaceId: context.workspaceId,
+    });
     const emitDocumentOutcome = async (input: {
       agentId?: string;
       agentDocumentId?: string;
@@ -130,30 +121,6 @@ export const agentDocumentsRuntime: ServerRuntimeRegistration = {
       return doc;
     };
 
-    const resolveWorkspaceSlugForUrl = async (): Promise<string | undefined> => {
-      if (!context.workspaceId) return undefined;
-
-      workspaceSlugPromise ??= new WorkspaceModel(db, userId)
-        .findById(context.workspaceId)
-        .then((workspace) => workspace?.slug)
-        .catch((error) => {
-          console.error('[agentDocumentsRuntime] Failed to resolve workspace slug:', error);
-          return undefined;
-        });
-
-      return workspaceSlugPromise;
-    };
-
-    const buildRegisteredDocumentUrl = async (agentId: string, documentId?: string) => {
-      if (!documentId) return undefined;
-      const workspaceSlug = await resolveWorkspaceSlugForUrl();
-      if (context.workspaceId && !workspaceSlug) return undefined;
-
-      return buildAgentDocumentUrl(getAgentDocumentAppUrl(), agentId, documentId, {
-        workspaceSlug,
-      });
-    };
-
     const registerDocumentWork = async (input: {
       agentDocumentId?: string;
       agentId: string;
@@ -161,48 +128,20 @@ export const agentDocumentsRuntime: ServerRuntimeRegistration = {
       role: 'created' | 'updated';
       source: string;
       title?: string | null;
-    }) => {
-      if (!input.documentId) return;
-
-      try {
-        await workModel.registerDocument({
+    }) =>
+      workRegistrar.registerDocumentWork({
+        ...input,
+        context: {
           actorAgentId: context.agentId,
-          agentDocumentId: input.agentDocumentId,
-          agentId: input.agentId,
-          documentId: input.documentId,
-          role: input.role,
           rootOperationId: context.rootOperationId ?? context.operationId,
-          source: input.source,
           sourceMessageId: context.toolMessageId,
           sourceToolCallId: context.toolCallId,
-          sourceType: 'tool',
           threadId: context.threadId,
-          title: input.title,
           topicId: context.topicId,
-          url: await buildRegisteredDocumentUrl(input.agentId, input.documentId),
-        });
-      } catch (error) {
-        console.error('[agentDocumentsRuntime] register document work failed:', error);
-      }
-    };
+        },
+      });
 
-    const deleteDocumentWork = async (input: {
-      agentDocumentId?: string;
-      agentId: string;
-      documentId?: string;
-    }) => {
-      if (!input.documentId) return;
-
-      try {
-        await workModel.deleteDocumentWork({
-          agentDocumentId: input.agentDocumentId,
-          agentId: input.agentId,
-          documentId: input.documentId,
-        });
-      } catch (error) {
-        console.error('[agentDocumentsRuntime] delete document work failed:', error);
-      }
-    };
+    const deleteDocumentWork = workRegistrar.deleteDocumentWork;
 
     return new AgentDocumentsExecutionRuntime(
       {
@@ -416,14 +355,8 @@ export const agentDocumentsRuntime: ServerRuntimeRegistration = {
           ),
       },
       {
-        getDocumentUrl: async ({ agentId, documentId }) => {
-          const workspaceSlug = await resolveWorkspaceSlugForUrl();
-          if (context.workspaceId && !workspaceSlug) return undefined;
-
-          return buildAgentDocumentUrl(getAgentDocumentAppUrl(), agentId, documentId, {
-            workspaceSlug,
-          });
-        },
+        getDocumentUrl: ({ agentId, documentId }) =>
+          workRegistrar.buildRegisteredDocumentUrl(agentId, documentId),
       },
     );
   },

@@ -1,6 +1,5 @@
 import type {
   TaskStatus,
-  TaskWorkListItem,
   WorkListItem,
   WorkSummaryItem,
   WorkVersionListItem,
@@ -196,12 +195,24 @@ const VersionList = memo<{ workId: string }>(({ workId }) => {
 
 VersionList.displayName = 'VersionList';
 
-const TaskWorkVersionHistoryCard = memo<{ work: TaskWorkListItem }>(({ work }) => {
+const WorkVersionHistoryCard = memo<{ work: WorkListItem }>(({ work }) => {
   const [expanded, setExpanded] = useState(false);
-  const openTaskDetail = useChatStore((s) => s.openTaskDetail);
-  const status = toTaskStatus(work.task.status);
-  const taskIdentifier = work.resourceIdentifier ?? work.resourceId;
+  const [openDocument, openTaskDetail] = useChatStore((s) => [s.openDocument, s.openTaskDetail]);
   const ToggleIcon = expanded ? ChevronDownIcon : ChevronRightIcon;
+  const label = work.resourceIdentifier ?? work.resourceId;
+
+  const externalUrl =
+    work.type === 'linear' ? work.linear.url : work.type === 'github' ? work.github.url : undefined;
+  // Mirrors WorkSummaryCard: linear/github rows without a URL get no title
+  // click affordance — the click just falls through to the expand toggle.
+  const handleTitleClick =
+    work.type === 'document'
+      ? () => openDocument(work.document.id)
+      : work.type === 'linear' || work.type === 'github'
+        ? externalUrl
+          ? () => window.open(externalUrl, '_blank', 'noopener,noreferrer')
+          : undefined
+        : () => openTaskDetail(label);
 
   return (
     <Flexbox className={styles.workCard}>
@@ -213,18 +224,31 @@ const TaskWorkVersionHistoryCard = memo<{ work: TaskWorkListItem }>(({ work }) =
         onClick={() => setExpanded((value) => !value)}
       >
         <ToggleIcon size={16} />
-        <TaskPriorityTag disableDropdown priority={work.task.priority} size={14} />
-        <TaskStatusTag disableDropdown size={14} status={status} />
+        {work.type === 'task' ? (
+          <>
+            <TaskPriorityTag disableDropdown priority={work.task.priority} size={14} />
+            <TaskStatusTag disableDropdown size={14} status={toTaskStatus(work.task.status)} />
+          </>
+        ) : work.type === 'document' ? (
+          <FileTextIcon className={styles.context} size={16} />
+        ) : work.type === 'linear' ? (
+          <LinearIcon className={styles.context} size={16} />
+        ) : (
+          <Github className={styles.context} size={16} />
+        )}
         <Text className={styles.context} style={{ flexShrink: 0 }}>
-          {taskIdentifier}
+          {label}
         </Text>
         <Text
           ellipsis
           className={styles.title}
-          onClick={(event) => {
-            event.stopPropagation();
-            openTaskDetail(taskIdentifier);
-          }}
+          onClick={
+            handleTitleClick &&
+            ((event) => {
+              event.stopPropagation();
+              handleTitleClick();
+            })
+          }
         >
           {work.title}
         </Text>
@@ -233,138 +257,6 @@ const TaskWorkVersionHistoryCard = memo<{ work: TaskWorkListItem }>(({ work }) =
     </Flexbox>
   );
 });
-
-TaskWorkVersionHistoryCard.displayName = 'TaskWorkVersionHistoryCard';
-
-const DocumentWorkVersionHistoryCard = memo<{ work: Extract<WorkListItem, { type: 'document' }> }>(
-  ({ work }) => {
-    const [expanded, setExpanded] = useState(false);
-    const openDocument = useChatStore((s) => s.openDocument);
-    const ToggleIcon = expanded ? ChevronDownIcon : ChevronRightIcon;
-    const label = work.resourceIdentifier ?? work.resourceId;
-
-    return (
-      <Flexbox className={styles.workCard}>
-        <Flexbox
-          horizontal
-          align={'center'}
-          className={styles.header}
-          gap={8}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          <ToggleIcon size={16} />
-          <FileTextIcon className={styles.context} size={16} />
-          <Text className={styles.context} style={{ flexShrink: 0 }}>
-            {label}
-          </Text>
-          <Text
-            ellipsis
-            className={styles.title}
-            onClick={(event) => {
-              event.stopPropagation();
-              openDocument(work.document.id);
-            }}
-          >
-            {work.title}
-          </Text>
-        </Flexbox>
-        {expanded && <VersionList workId={work.id} />}
-      </Flexbox>
-    );
-  },
-);
-
-DocumentWorkVersionHistoryCard.displayName = 'DocumentWorkVersionHistoryCard';
-
-const LinearWorkVersionHistoryCard = memo<{ work: Extract<WorkListItem, { type: 'linear' }> }>(
-  ({ work }) => {
-    const [expanded, setExpanded] = useState(false);
-    const ToggleIcon = expanded ? ChevronDownIcon : ChevronRightIcon;
-    const label = work.resourceIdentifier ?? work.resourceId;
-
-    return (
-      <Flexbox className={styles.workCard}>
-        <Flexbox
-          horizontal
-          align={'center'}
-          className={styles.header}
-          gap={8}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          <ToggleIcon size={16} />
-          <LinearIcon className={styles.context} size={16} />
-          <Text className={styles.context} style={{ flexShrink: 0 }}>
-            {label}
-          </Text>
-          <Text
-            ellipsis
-            className={styles.title}
-            onClick={(event) => {
-              event.stopPropagation();
-              if (work.linear.url) window.open(work.linear.url, '_blank', 'noopener,noreferrer');
-            }}
-          >
-            {work.title}
-          </Text>
-        </Flexbox>
-        {expanded && <VersionList workId={work.id} />}
-      </Flexbox>
-    );
-  },
-);
-
-LinearWorkVersionHistoryCard.displayName = 'LinearWorkVersionHistoryCard';
-
-const GithubWorkVersionHistoryCard = memo<{ work: Extract<WorkListItem, { type: 'github' }> }>(
-  ({ work }) => {
-    const [expanded, setExpanded] = useState(false);
-    const ToggleIcon = expanded ? ChevronDownIcon : ChevronRightIcon;
-    const label = work.resourceIdentifier ?? work.resourceId;
-
-    return (
-      <Flexbox className={styles.workCard}>
-        <Flexbox
-          horizontal
-          align={'center'}
-          className={styles.header}
-          gap={8}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          <ToggleIcon size={16} />
-          <Github className={styles.context} size={16} />
-          <Text className={styles.context} style={{ flexShrink: 0 }}>
-            {label}
-          </Text>
-          <Text
-            ellipsis
-            className={styles.title}
-            onClick={(event) => {
-              event.stopPropagation();
-              if (work.github.url) window.open(work.github.url, '_blank', 'noopener,noreferrer');
-            }}
-          >
-            {work.title}
-          </Text>
-        </Flexbox>
-        {expanded && <VersionList workId={work.id} />}
-      </Flexbox>
-    );
-  },
-);
-
-GithubWorkVersionHistoryCard.displayName = 'GithubWorkVersionHistoryCard';
-
-const WorkVersionHistoryCard = memo<{ work: WorkListItem }>(({ work }) =>
-  work.type === 'document' ? (
-    <DocumentWorkVersionHistoryCard work={work} />
-  ) : work.type === 'linear' ? (
-    <LinearWorkVersionHistoryCard work={work} />
-  ) : work.type === 'github' ? (
-    <GithubWorkVersionHistoryCard work={work} />
-  ) : (
-    <TaskWorkVersionHistoryCard work={work} />
-  ),
-);
 
 WorkVersionHistoryCard.displayName = 'WorkVersionHistoryCard';
 

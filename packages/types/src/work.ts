@@ -260,7 +260,6 @@ export type WorkContextVersionItem =
   | GithubWorkContextVersionItem
   | LinearWorkContextVersionItem
   | TaskWorkContextVersionItem;
-export type TaskWorkContextVersionMap = Record<string, TaskWorkContextVersionItem[]>;
 export type WorkContextVersionMap = Record<string, WorkContextVersionItem[]>;
 
 export interface TaskWorkSummaryItem extends TaskWorkListItem {
@@ -289,7 +288,6 @@ export interface GithubWorkSummaryItem extends GithubWorkListItem {
 
 export type WorkSummaryItem =
   DocumentWorkSummaryItem | GithubWorkSummaryItem | LinearWorkSummaryItem | TaskWorkSummaryItem;
-export type TaskWorkSummaryMap = Record<string, TaskWorkSummaryItem[]>;
 export type WorkSummaryMap = Record<string, WorkSummaryItem[]>;
 
 export interface WorkVersionListItem extends WorkVersionItem {

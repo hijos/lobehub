@@ -6,6 +6,15 @@ import type {
   RegisterLinearWorkParams,
 } from '@lobechat/types';
 
+import {
+  fromRecord,
+  hasOwn,
+  isApplicationError,
+  parseMaybeJSON,
+  stringValue,
+  toRecord,
+} from './toolResultParsing';
+
 const LINEAR_CREATE_TOOLS = new Set(['create_document', 'save_document', 'save_issue']);
 const LINEAR_ISSUE_IDENTIFIER_PATTERN = /^[A-Z][A-Z0-9]+-\d+$/u;
 const MAX_LINEAR_SNAPSHOT_TEXT_LENGTH = 4000;
@@ -16,28 +25,6 @@ interface LinearToolRegisterOperation {
 }
 
 export type LinearToolWorkOperation = LinearToolRegisterOperation;
-
-const toRecord = (value: unknown): Record<string, unknown> | null =>
-  value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-
-const parseMaybeJSON = (value: unknown): unknown => {
-  if (typeof value !== 'string') return value;
-
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
-};
-
-const stringValue = (value: unknown): string | null => {
-  if (typeof value !== 'string') return null;
-
-  const trimmed = value.trim();
-  return trimmed || null;
-};
 
 const snapshotText = (value: unknown): string | null => {
   const text = stringValue(value);
@@ -50,9 +37,6 @@ const snapshotText = (value: unknown): string | null => {
 
 const numberValue = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
-
-const hasOwn = (record: Record<string, unknown>, key: string) =>
-  Object.prototype.hasOwnProperty.call(record, key);
 
 const firstDefined = <T>(...values: Array<T | null | undefined>): T | null | undefined =>
   values.find((value) => value !== undefined);
@@ -155,20 +139,6 @@ const unwrapData = (data: unknown, keys: string[]) => {
   if (!record) return null;
 
   return nestedRecord(record, keys);
-};
-
-const isApplicationError = (data: unknown) => {
-  const record = toRecord(parseMaybeJSON(data));
-  return record?.isError === true;
-};
-
-const fromRecord = (record: Record<string, unknown>, keys: string[]) => {
-  for (const key of keys) {
-    const value = stringValue(record[key]);
-    if (value) return value;
-  }
-
-  return null;
 };
 
 const extractLabels = (value: unknown): string[] => {

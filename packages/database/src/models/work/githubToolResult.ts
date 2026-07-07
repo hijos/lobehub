@@ -6,6 +6,15 @@ import type {
   RegisterGithubWorkParams,
 } from '@lobechat/types';
 
+import {
+  fromRecord,
+  hasOwn,
+  isApplicationError,
+  parseMaybeJSON,
+  stringValue,
+  toRecord,
+} from './toolResultParsing';
+
 const MAX_GITHUB_SNAPSHOT_TEXT_LENGTH = 4000;
 
 /**
@@ -42,28 +51,6 @@ interface GithubToolRegisterOperation {
 
 export type GithubToolWorkOperation = GithubToolRegisterOperation;
 
-const toRecord = (value: unknown): Record<string, unknown> | null =>
-  value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-
-const parseMaybeJSON = (value: unknown): unknown => {
-  if (typeof value !== 'string') return value;
-
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
-};
-
-const stringValue = (value: unknown): string | null => {
-  if (typeof value !== 'string') return null;
-
-  const trimmed = value.trim();
-  return trimmed || null;
-};
-
 const snapshotText = (value: unknown): string | null => {
   const text = stringValue(value);
   if (!text) return null;
@@ -77,18 +64,6 @@ const numberValue = (value: unknown): number | null => {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
 
   if (typeof value === 'string' && /^\d+$/.test(value.trim())) return Number(value.trim());
-
-  return null;
-};
-
-const hasOwn = (record: Record<string, unknown>, key: string) =>
-  Object.prototype.hasOwnProperty.call(record, key);
-
-const fromRecord = (record: Record<string, unknown>, keys: string[]) => {
-  for (const key of keys) {
-    const value = stringValue(record[key]);
-    if (value) return value;
-  }
 
   return null;
 };
@@ -155,11 +130,6 @@ const unwrapData = (data: unknown): Record<string, unknown> | null => {
   }
 
   return record;
-};
-
-const isApplicationError = (data: unknown) => {
-  const record = toRecord(parseMaybeJSON(data));
-  return record?.isError === true;
 };
 
 const ownerRepoFromUrl = (url: string | null): string | null => {
@@ -327,6 +297,15 @@ const CONTROL_OPERATORS = new Set(['&&', '||', ';', '|', '&']);
  * Minimal POSIX-ish tokenizer: whitespace splitting with single/double quote
  * and backslash handling. Returns null on unterminated quotes — better to
  * skip registration than to mis-attribute flag values.
+ *
+ * Deliberately hand-rolled instead of adding a `shell-quote`-style dependency:
+ * a real shell parser would also expand what we must keep literal (`$VAR`,
+ * globs) and adds a dependency to the database package for a best-effort
+ * bookkeeping path whose worst failure mode is skipping a Work registration.
+ * Known trade-off: quoting is stripped before operator splitting, so a quoted
+ * literal like `--title '&&'` is treated as a control operator and at worst
+ * truncates the parsed segment. Edge cases are pinned in
+ * `__tests__/githubToolResult.test.ts`.
  */
 const tokenizeShellCommand = (input: string): string[] | null => {
   const tokens: string[] = [];

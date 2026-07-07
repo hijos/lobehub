@@ -14,10 +14,13 @@ import { TopicTrigger } from '@/const/topic';
 import { AgentDocumentModel, deriveAgentDocumentFields } from '@/database/models/agentDocuments';
 import { TopicModel } from '@/database/models/topic';
 import { TopicDocumentModel } from '@/database/models/topicDocument';
-import { WorkModel } from '@/database/models/work';
 import { router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
 import { AgentDocumentsService } from '@/server/services/agentDocuments';
+import {
+  createDocumentWorkRegistrar,
+  type DocumentWorkRegistrar,
+} from '@/server/services/agentDocuments/documentWork';
 import { emitAgentDocumentToolOutcomeSafely } from '@/server/services/agentDocuments/toolOutcome';
 import { AgentDocumentVfsService } from '@/server/services/agentDocumentVfs';
 import { AgentDocumentVfsError } from '@/server/services/agentDocumentVfs/errors';
@@ -170,9 +173,14 @@ const agentDocumentProcedure = wsCompatProcedure.use(serverDatabase).use(async (
       agentDocumentVfsService: new AgentDocumentVfsService(ctx.serverDB, ctx.userId, wsId),
       skillManagementService: new SkillManagementDocumentService(ctx.serverDB, ctx.userId, wsId),
       systemAgentService: new SystemAgentService(ctx.serverDB, ctx.userId, wsId),
+      documentWorkRegistrar: createDocumentWorkRegistrar({
+        db: ctx.serverDB,
+        logPrefix: '[agentDocumentRouter]',
+        userId: ctx.userId,
+        workspaceId: wsId,
+      }),
       topicModel: new TopicModel(ctx.serverDB, ctx.userId, wsId),
       topicDocumentModel: new TopicDocumentModel(ctx.serverDB, ctx.userId, wsId),
-      workModel: new WorkModel(ctx.serverDB, ctx.userId, wsId),
     },
   });
 });
@@ -226,54 +234,32 @@ const registerDocumentWorkFromTool = async (input: {
   agentId: string;
   description?: string | null;
   documentId?: string;
+  registrar: DocumentWorkRegistrar;
   role: 'created' | 'updated';
   source: string;
   title?: string | null;
   toolContext?: z.infer<typeof agentDocumentToolContextSchema>;
   topicId?: string;
-  workModel: WorkModel;
 }) => {
   if (!input.toolContext || !input.documentId) return;
 
-  try {
-    await input.workModel.registerDocument({
+  await input.registrar.registerDocumentWork({
+    agentDocumentId: input.agentDocumentId,
+    agentId: input.agentId,
+    context: {
       actorAgentId: input.agentId,
-      agentDocumentId: input.agentDocumentId,
-      agentId: input.agentId,
-      description: input.description,
-      documentId: input.documentId,
-      role: input.role,
       rootOperationId: input.toolContext.rootOperationId ?? input.toolContext.operationId,
-      source: input.source,
       sourceMessageId: input.toolContext.toolMessageId ?? input.toolContext.messageId,
       sourceToolCallId: input.toolContext.toolCallId,
-      sourceType: 'tool',
       threadId: input.toolContext.threadId,
-      title: input.title,
       topicId: input.topicId ?? input.toolContext.topicId,
-    });
-  } catch (error) {
-    console.error('[agentDocumentRouter] register document work failed:', error);
-  }
-};
-
-const deleteDocumentWorkFromTool = async (input: {
-  agentDocumentId?: string;
-  agentId: string;
-  documentId?: string;
-  workModel: WorkModel;
-}) => {
-  if (!input.documentId) return;
-
-  try {
-    await input.workModel.deleteDocumentWork({
-      agentDocumentId: input.agentDocumentId,
-      agentId: input.agentId,
-      documentId: input.documentId,
-    });
-  } catch (error) {
-    console.error('[agentDocumentRouter] delete document work failed:', error);
-  }
+    },
+    description: input.description,
+    documentId: input.documentId,
+    role: input.role,
+    source: input.source,
+    title: input.title,
+  });
 };
 
 /**
@@ -1064,7 +1050,7 @@ export const agentDocumentRouter = router({
             source: 'createDocument',
             title: doc?.title ?? input.title,
             toolContext: input.toolContext,
-            workModel: ctx.workModel,
+            registrar: ctx.documentWorkRegistrar,
           });
         }
 
@@ -1135,7 +1121,7 @@ export const agentDocumentRouter = router({
             title: doc?.title ?? title,
             toolContext: input.toolContext,
             topicId: input.topicId,
-            workModel: ctx.workModel,
+            registrar: ctx.documentWorkRegistrar,
           });
         }
 
@@ -1204,7 +1190,7 @@ export const agentDocumentRouter = router({
           source: 'modifyNodes',
           title: doc?.title,
           toolContext: input.toolContext,
-          workModel: ctx.workModel,
+          registrar: ctx.documentWorkRegistrar,
         });
       }
 
@@ -1240,7 +1226,7 @@ export const agentDocumentRouter = router({
           source: 'replaceDocumentContent',
           title: doc?.title,
           toolContext: input.toolContext,
-          workModel: ctx.workModel,
+          registrar: ctx.documentWorkRegistrar,
         });
       }
 
@@ -1263,11 +1249,10 @@ export const agentDocumentRouter = router({
       const doc = await ctx.agentDocumentService.getDocumentById(input.id, input.agentId);
       const deleted = await ctx.agentDocumentService.removeDocumentById(input.id, input.agentId);
       if (deleted && input.trigger === 'tool') {
-        await deleteDocumentWorkFromTool({
+        await ctx.documentWorkRegistrar.deleteDocumentWork({
           agentDocumentId: input.id,
           agentId: input.agentId,
           documentId: doc?.documentId,
-          workModel: ctx.workModel,
         });
       }
 
@@ -1304,7 +1289,7 @@ export const agentDocumentRouter = router({
             source: 'copyDocument',
             title: doc?.title ?? input.newTitle,
             toolContext: input.toolContext,
-            workModel: ctx.workModel,
+            registrar: ctx.documentWorkRegistrar,
           });
         }
 
@@ -1344,7 +1329,7 @@ export const agentDocumentRouter = router({
             source: 'renameDocument',
             title: doc?.title ?? input.newTitle,
             toolContext: input.toolContext,
-            workModel: ctx.workModel,
+            registrar: ctx.documentWorkRegistrar,
           });
         }
 

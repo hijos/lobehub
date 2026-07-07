@@ -127,6 +127,45 @@ describe('call_tool executor', () => {
       );
     });
 
+    it('should not block the tool step on the cumulative usage backfill', async () => {
+      // The backfill is best-effort bookkeeping fired without awaiting; a slow
+      // (here: never-resolving) network call must not delay the executor.
+      vi.mocked(workService.updateVersionCumulativeUsage).mockClear();
+      vi.mocked(workService.updateVersionCumulativeUsage).mockImplementationOnce(
+        () => new Promise(() => {}),
+      );
+
+      const mockStore = createMockStore();
+      const context = createTestContext({ operationId: 'root-op-1' });
+
+      const assistantMessage = createAssistantMessage({ groupId: 'group_123' });
+      mockStore.dbMessagesMap[context.messageKey] = [assistantMessage];
+
+      const toolCall: ChatToolPayload = {
+        apiName: 'search',
+        arguments: JSON.stringify({ query: 'test query' }),
+        id: 'tool_call_blocking',
+        identifier: 'lobe-web-browsing',
+        type: 'default',
+      };
+
+      const instruction = createCallToolInstruction(toolCall, { parentMessageId: 'msg_parent' });
+      const state = createInitialState({ operationId: 'root-op-1' });
+
+      const result = await executeWithMockContext({
+        executor: 'call_tool',
+        instruction,
+        state,
+        mockStore,
+        context,
+      });
+
+      expect(result.events).toHaveLength(1);
+      expect(workService.updateVersionCumulativeUsage).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceToolCallId: 'tool_call_blocking' }),
+      );
+    });
+
     it('should call internal_invokeDifferentTypePlugin with correct parameters', async () => {
       // Given
       const mockStore = createMockStore();
@@ -1957,8 +1996,7 @@ describe('call_tool executor', () => {
 
       // Track cancel handler registration
       let executeToolCancelHandler:
-        | ((context: OperationCancelContext) => void | Promise<void>)
-        | undefined;
+        ((context: OperationCancelContext) => void | Promise<void>) | undefined;
       const originalOnOperationCancel = mockStore.onOperationCancel;
       mockStore.onOperationCancel = vi.fn(
         (opId: string, handler: (context: OperationCancelContext) => void | Promise<void>) => {

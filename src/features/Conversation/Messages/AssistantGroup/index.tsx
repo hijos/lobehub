@@ -32,6 +32,7 @@ import {
   messageStateSelectors,
   useConversationStore,
 } from '../../store';
+import { getOperationFinalRootId } from '../../store/slices/data/workRootOperationIds';
 import InterruptedHint from '../Assistant/components/InterruptedHint';
 import Usage from '../components/Extras/Usage';
 import MessageBranch from '../components/MessageBranch';
@@ -55,9 +56,6 @@ const actionBarHolder = (
     style={{ height: '28px' }}
   />
 );
-
-const getOperationFinalRootId = (metadata?: { work?: { rootOperationId?: unknown } } | null) =>
-  typeof metadata?.work?.rootOperationId === 'string' ? metadata.work.rootOperationId : undefined;
 
 const findLatestWorkRootOperationId = (
   metadata?: { work?: { rootOperationId?: unknown } } | null,

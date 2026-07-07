@@ -50,7 +50,43 @@ import { normalizeLinearToolResult } from './work/linearToolResult';
 
 const MAX_VERSION_CREATE_RETRIES = 5;
 const DOCUMENT_DESCRIPTION_PREFIX_LENGTH = 120;
+/**
+ * Over-fetch multiplier for list/summary queries: one per Work provider type
+ * (task / document / linear / github). Rows are fetched per type and deduped
+ * to the latest item per work in JS, so each query over-fetches by this factor
+ * before results are trimmed back down to `limit`.
+ */
+const WORK_TYPE_FANOUT = 4;
+/**
+ * Hard ceiling for the summary-row over-fetch LIMIT: `rootOperationIds` length
+ * is caller-controlled (the tRPC schema caps only `limit`), so without a clamp
+ * a long conversation's batched ids would inflate the per-type ORDER-BY
+ * queries and the matching in-memory sort far beyond the final capped result.
+ */
+const MAX_SUMMARY_ROW_LIMIT = 1000;
 const VERSION_CONTEXT_ROLES = ['created', 'updated'] as const;
+
+/** Context fields shared by all four Register*WorkParams shapes. */
+type WorkVersionContextParams = Pick<
+  RegisterTaskWorkParams,
+  | 'actorAgentId'
+  | 'role'
+  | 'rootOperationId'
+  | 'source'
+  | 'sourceMessageId'
+  | 'sourceToolCallId'
+  | 'sourceType'
+  | 'threadId'
+  | 'topicId'
+>;
+
+/** Provider-specific inputs for one work-version insert attempt. */
+interface CreateVersionInput {
+  metadata?: (typeof workContexts.$inferInsert)['metadata'];
+  renderType: (typeof workVersions.$inferInsert)['renderType'];
+  snapshot: WorkVersionSnapshot;
+  title: string;
+}
 
 interface TaskWorkSummaryQueryRow {
   context: typeof workContexts.$inferSelect;
@@ -61,26 +97,22 @@ interface TaskWorkSummaryQueryRow {
   work: WorkItem;
 }
 
-interface DocumentWorkSummaryQueryRow {
+/**
+ * Work types whose list rows are fully described by the version's snapshot
+ * JSON (unlike `task`, which additionally joins the tasks table).
+ */
+type SnapshotWorkType = 'document' | 'github' | 'linear';
+
+interface SnapshotWorkSummaryQueryRow<Snapshot> {
   context: typeof workContexts.$inferSelect;
-  document: DocumentWorkVersionSnapshot;
+  snapshot: Snapshot;
   version: DocumentWorkSummaryItem['version'];
   work: WorkItem;
 }
 
-interface LinearWorkSummaryQueryRow {
-  context: typeof workContexts.$inferSelect;
-  linear: LinearWorkVersionSnapshot;
-  version: LinearWorkSummaryItem['version'];
-  work: WorkItem;
-}
-
-interface GithubWorkSummaryQueryRow {
-  context: typeof workContexts.$inferSelect;
-  github: GithubWorkVersionSnapshot;
-  version: GithubWorkSummaryItem['version'];
-  work: WorkItem;
-}
+/** Project the per-type snapshot object out of the version's snapshot JSON. */
+const snapshotField = <Snapshot>(type: SnapshotWorkType) =>
+  sql<Snapshot>`${workVersions.snapshot}->${sql.raw(`'${type}'`)}`;
 
 const isUniqueViolation = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
@@ -370,6 +402,21 @@ export class WorkModel {
     params.resourceIdentifier?.trim() ||
     `${params.resourceType === 'github_issue' ? 'GitHub issue' : 'GitHub pull request'} ${params.resourceId}`;
 
+  /**
+   * `works` has two partial unique indexes (workspace-scoped vs personal);
+   * pick the ON CONFLICT target matching this model's scope.
+   */
+  private resolveWorkUpsertConflict = () =>
+    this.workspaceId
+      ? {
+          target: [works.workspaceId, works.resourceType, works.resourceId],
+          targetWhere: isNotNull(works.workspaceId),
+        }
+      : {
+          target: [works.resourceType, works.resourceId, works.userId],
+          targetWhere: isNull(works.workspaceId),
+        };
+
   private upsertTaskWork = async (task: TaskItem, title: string): Promise<WorkItem> => {
     const values = {
       resourceId: task.id,
@@ -381,15 +428,7 @@ export class WorkModel {
       workspaceId: this.workspaceId ?? null,
     };
 
-    const conflict = this.workspaceId
-      ? {
-          target: [works.workspaceId, works.resourceType, works.resourceId],
-          targetWhere: isNotNull(works.workspaceId),
-        }
-      : {
-          target: [works.resourceType, works.resourceId, works.userId],
-          targetWhere: isNull(works.workspaceId),
-        };
+    const conflict = this.resolveWorkUpsertConflict();
 
     const [work] = await this.db
       .insert(works)
@@ -418,15 +457,7 @@ export class WorkModel {
       workspaceId: this.workspaceId ?? null,
     };
 
-    const conflict = this.workspaceId
-      ? {
-          target: [works.workspaceId, works.resourceType, works.resourceId],
-          targetWhere: isNotNull(works.workspaceId),
-        }
-      : {
-          target: [works.resourceType, works.resourceId, works.userId],
-          targetWhere: isNull(works.workspaceId),
-        };
+    const conflict = this.resolveWorkUpsertConflict();
 
     const [work] = await this.db
       .insert(works)
@@ -457,15 +488,7 @@ export class WorkModel {
       workspaceId: this.workspaceId ?? null,
     };
 
-    const conflict = this.workspaceId
-      ? {
-          target: [works.workspaceId, works.resourceType, works.resourceId],
-          targetWhere: isNotNull(works.workspaceId),
-        }
-      : {
-          target: [works.resourceType, works.resourceId, works.userId],
-          targetWhere: isNull(works.workspaceId),
-        };
+    const conflict = this.resolveWorkUpsertConflict();
 
     const [work] = await this.db
       .insert(works)
@@ -498,15 +521,7 @@ export class WorkModel {
       workspaceId: this.workspaceId ?? null,
     };
 
-    const conflict = this.workspaceId
-      ? {
-          target: [works.workspaceId, works.resourceType, works.resourceId],
-          targetWhere: isNotNull(works.workspaceId),
-        }
-      : {
-          target: [works.resourceType, works.resourceId, works.userId],
-          targetWhere: isNull(works.workspaceId),
-        };
+    const conflict = this.resolveWorkUpsertConflict();
 
     const [work] = await this.db
       .insert(works)
@@ -587,18 +602,28 @@ export class WorkModel {
     return row?.github ?? null;
   };
 
-  private createTaskVersion = async (
+  /**
+   * Shared version-create pipeline: dedupe by sourceToolCallId, allocate the
+   * next version number in a transaction, insert the version + context rows,
+   * bump works.currentVersionId, and retry on unique-violation races.
+   *
+   * `buildInput` runs inside every retry attempt on purpose: a retry means a
+   * concurrent registration for the same Work won the version race, so inputs
+   * patch-merged against the previous snapshot (linear/github) must be rebuilt
+   * from the winner's committed state — reusing the pre-race merge would
+   * silently revert the winner's fields.
+   */
+  private createVersion = async (
     work: WorkItem,
-    task: TaskItem,
-    params: RegisterTaskWorkParams,
+    params: WorkVersionContextParams,
+    buildInput: () => CreateVersionInput | Promise<CreateVersionInput>,
   ): Promise<WorkVersionItem> => {
     const existing = await this.findVersionBySourceToolCall(work.id, params.sourceToolCallId);
     if (existing) return existing;
 
-    const title = this.taskTitle(task, params.title);
-    const snapshot = this.taskSnapshot(task);
-
     for (let attempt = 0; attempt < MAX_VERSION_CREATE_RETRIES; attempt += 1) {
+      const { metadata, renderType, snapshot, title } = await buildInput();
+
       try {
         return await this.db.transaction(async (tx) => {
           const now = new Date();
@@ -613,7 +638,7 @@ export class WorkModel {
             .insert(workVersions)
             .values({
               contentRefType: 'inline_snapshot',
-              renderType: 'task_snapshot',
+              renderType,
               snapshot,
               title,
               version: Number(next.version),
@@ -623,6 +648,7 @@ export class WorkModel {
 
           await tx.insert(workContexts).values({
             actorAgentId: params.actorAgentId ?? null,
+            metadata: metadata ?? null,
             role: params.role,
             rootOperationId: params.rootOperationId ?? null,
             source: params.source,
@@ -655,223 +681,66 @@ export class WorkModel {
       }
     }
 
-    throw new Error('Failed to create work version after max retries');
+    throw new Error(`Failed to create ${work.type} work version after max retries`);
   };
+
+  private createTaskVersion = async (
+    work: WorkItem,
+    task: TaskItem,
+    params: RegisterTaskWorkParams,
+  ): Promise<WorkVersionItem> =>
+    this.createVersion(work, params, () => ({
+      renderType: 'task_snapshot',
+      snapshot: this.taskSnapshot(task),
+      title: this.taskTitle(task, params.title),
+    }));
 
   private createDocumentVersion = async (
     work: WorkItem,
     doc: DocumentItem,
     params: RegisterDocumentWorkParams,
-  ): Promise<WorkVersionItem> => {
-    const existing = await this.findVersionBySourceToolCall(work.id, params.sourceToolCallId);
-    if (existing) return existing;
-
-    const title = this.documentTitle(doc, params.title);
-    const snapshot = this.documentSnapshot(doc, params);
-
-    for (let attempt = 0; attempt < MAX_VERSION_CREATE_RETRIES; attempt += 1) {
-      try {
-        return await this.db.transaction(async (tx) => {
-          const now = new Date();
-          const [next] = await tx
-            .select({
-              version: sql<number>`COALESCE(MAX(${workVersions.version}), 0) + 1`,
-            })
-            .from(workVersions)
-            .where(eq(workVersions.workId, work.id));
-
-          const [version] = await tx
-            .insert(workVersions)
-            .values({
-              contentRefType: 'inline_snapshot',
-              renderType: 'document_snapshot',
-              snapshot,
-              title,
-              version: Number(next.version),
-              workId: work.id,
-            })
-            .returning();
-
-          await tx.insert(workContexts).values({
-            actorAgentId: params.actorAgentId ?? null,
-            metadata: params.agentDocumentId ? { agentDocumentId: params.agentDocumentId } : null,
-            role: params.role,
-            rootOperationId: params.rootOperationId ?? null,
-            source: params.source,
-            sourceMessageId: params.sourceMessageId ?? null,
-            sourceToolCallId: params.sourceToolCallId ?? null,
-            sourceType: params.sourceType ?? 'tool',
-            threadId: params.threadId ?? null,
-            topicId: params.topicId ?? null,
-            userId: this.userId,
-            versionId: version.id,
-            workId: work.id,
-            workspaceId: this.workspaceId ?? null,
-          });
-
-          await tx
-            .update(works)
-            .set({ currentVersionId: version.id, title, updatedAt: now })
-            .where(and(eq(works.id, work.id), this.ownership()));
-
-          return version;
-        });
-      } catch (error) {
-        if (!isUniqueViolation(error) || attempt === MAX_VERSION_CREATE_RETRIES - 1) throw error;
-
-        const existingAfterConflict = await this.findVersionBySourceToolCall(
-          work.id,
-          params.sourceToolCallId,
-        );
-        if (existingAfterConflict) return existingAfterConflict;
-      }
-    }
-
-    throw new Error('Failed to create document work version after max retries');
-  };
+  ): Promise<WorkVersionItem> =>
+    this.createVersion(work, params, () => ({
+      metadata: params.agentDocumentId ? { agentDocumentId: params.agentDocumentId } : null,
+      renderType: 'document_snapshot',
+      snapshot: this.documentSnapshot(doc, params),
+      title: this.documentTitle(doc, params.title),
+    }));
 
   private createLinearVersion = async (
     work: WorkItem,
     params: RegisterLinearWorkParams,
-  ): Promise<WorkVersionItem> => {
-    const existing = await this.findVersionBySourceToolCall(work.id, params.sourceToolCallId);
-    if (existing) return existing;
+  ): Promise<WorkVersionItem> =>
+    this.createVersion(work, params, async () => {
+      // Re-read on every attempt (see createVersion): the patch-merge base must
+      // be the race winner's committed snapshot, not the pre-race one.
+      const previousSnapshot = await this.findCurrentLinearSnapshot(work.id);
+      // Linear update responses can be partial, e.g. { id, state }; keep prior labels/team.
+      const snapshot = this.linearSnapshot(params, previousSnapshot);
 
-    const previousSnapshot = await this.findCurrentLinearSnapshot(work.id);
-    // Linear update responses can be partial, e.g. { id, state }; keep prior labels/team.
-    const snapshot = this.linearSnapshot(params, previousSnapshot);
-    const title = snapshot.linear.title?.trim() || work.title;
-
-    for (let attempt = 0; attempt < MAX_VERSION_CREATE_RETRIES; attempt += 1) {
-      try {
-        return await this.db.transaction(async (tx) => {
-          const now = new Date();
-          const [next] = await tx
-            .select({
-              version: sql<number>`COALESCE(MAX(${workVersions.version}), 0) + 1`,
-            })
-            .from(workVersions)
-            .where(eq(workVersions.workId, work.id));
-
-          const [version] = await tx
-            .insert(workVersions)
-            .values({
-              contentRefType: 'inline_snapshot',
-              renderType: 'linear_snapshot',
-              snapshot,
-              title,
-              version: Number(next.version),
-              workId: work.id,
-            })
-            .returning();
-
-          await tx.insert(workContexts).values({
-            actorAgentId: params.actorAgentId ?? null,
-            role: params.role,
-            rootOperationId: params.rootOperationId ?? null,
-            source: params.source,
-            sourceMessageId: params.sourceMessageId ?? null,
-            sourceToolCallId: params.sourceToolCallId ?? null,
-            sourceType: params.sourceType ?? 'tool',
-            threadId: params.threadId ?? null,
-            topicId: params.topicId ?? null,
-            userId: this.userId,
-            versionId: version.id,
-            workId: work.id,
-            workspaceId: this.workspaceId ?? null,
-          });
-
-          await tx
-            .update(works)
-            .set({ currentVersionId: version.id, title, updatedAt: now })
-            .where(and(eq(works.id, work.id), this.ownership()));
-
-          return version;
-        });
-      } catch (error) {
-        if (!isUniqueViolation(error) || attempt === MAX_VERSION_CREATE_RETRIES - 1) throw error;
-
-        const existingAfterConflict = await this.findVersionBySourceToolCall(
-          work.id,
-          params.sourceToolCallId,
-        );
-        if (existingAfterConflict) return existingAfterConflict;
-      }
-    }
-
-    throw new Error('Failed to create linear work version after max retries');
-  };
+      return {
+        renderType: 'linear_snapshot',
+        snapshot,
+        title: snapshot.linear.title?.trim() || work.title,
+      };
+    });
 
   private createGithubVersion = async (
     work: WorkItem,
     params: Omit<RegisterGithubWorkParams, 'resourceId'> & { resourceId: string },
-  ): Promise<WorkVersionItem> => {
-    const existing = await this.findVersionBySourceToolCall(work.id, params.sourceToolCallId);
-    if (existing) return existing;
+  ): Promise<WorkVersionItem> =>
+    this.createVersion(work, params, async () => {
+      // Re-read on every attempt (see createVersion): the patch-merge base must
+      // be the race winner's committed snapshot, not the pre-race one.
+      const previousSnapshot = await this.findCurrentGithubSnapshot(work.id);
+      const snapshot = this.githubSnapshot(params, previousSnapshot);
 
-    const previousSnapshot = await this.findCurrentGithubSnapshot(work.id);
-    const snapshot = this.githubSnapshot(params, previousSnapshot);
-    const title = snapshot.github.title?.trim() || work.title;
-
-    for (let attempt = 0; attempt < MAX_VERSION_CREATE_RETRIES; attempt += 1) {
-      try {
-        return await this.db.transaction(async (tx) => {
-          const now = new Date();
-          const [next] = await tx
-            .select({
-              version: sql<number>`COALESCE(MAX(${workVersions.version}), 0) + 1`,
-            })
-            .from(workVersions)
-            .where(eq(workVersions.workId, work.id));
-
-          const [version] = await tx
-            .insert(workVersions)
-            .values({
-              contentRefType: 'inline_snapshot',
-              renderType: 'github_snapshot',
-              snapshot,
-              title,
-              version: Number(next.version),
-              workId: work.id,
-            })
-            .returning();
-
-          await tx.insert(workContexts).values({
-            actorAgentId: params.actorAgentId ?? null,
-            role: params.role,
-            rootOperationId: params.rootOperationId ?? null,
-            source: params.source,
-            sourceMessageId: params.sourceMessageId ?? null,
-            sourceToolCallId: params.sourceToolCallId ?? null,
-            sourceType: params.sourceType ?? 'tool',
-            threadId: params.threadId ?? null,
-            topicId: params.topicId ?? null,
-            userId: this.userId,
-            versionId: version.id,
-            workId: work.id,
-            workspaceId: this.workspaceId ?? null,
-          });
-
-          await tx
-            .update(works)
-            .set({ currentVersionId: version.id, title, updatedAt: now })
-            .where(and(eq(works.id, work.id), this.ownership()));
-
-          return version;
-        });
-      } catch (error) {
-        if (!isUniqueViolation(error) || attempt === MAX_VERSION_CREATE_RETRIES - 1) throw error;
-
-        const existingAfterConflict = await this.findVersionBySourceToolCall(
-          work.id,
-          params.sourceToolCallId,
-        );
-        if (existingAfterConflict) return existingAfterConflict;
-      }
-    }
-
-    throw new Error('Failed to create github work version after max retries');
-  };
+      return {
+        renderType: 'github_snapshot',
+        snapshot,
+        title: snapshot.github.title?.trim() || work.title,
+      };
+    });
 
   registerTask = async (params: RegisterTaskWorkParams): Promise<WorkItem | null> => {
     const task = await this.resolveTask(params);
@@ -1053,14 +922,19 @@ export class WorkModel {
     }));
   };
 
-  private listDocumentContextVersions = async (
+  /**
+   * Shared context-version query for snapshot-backed work types; `task` keeps
+   * its own variant because it additionally joins the tasks table.
+   */
+  private listSnapshotContextVersionRows = <Snapshot>(
+    type: SnapshotWorkType,
     filters: SQL[],
-    limit = 20,
-  ): Promise<DocumentWorkContextVersionItem[]> => {
-    const rows = await this.db
+    limit: number,
+  ) =>
+    this.db
       .select({
         context: workContexts,
-        document: sql<DocumentWorkVersionSnapshot>`${workVersions.snapshot}->'document'`,
+        snapshot: snapshotField<Snapshot>(type),
         version: {
           createdAt: workVersions.createdAt,
           cumulativeCost: workVersions.cumulativeCost,
@@ -1078,16 +952,26 @@ export class WorkModel {
           this.contextOwnership(),
           ...filters,
           inArray(workContexts.role, VERSION_CONTEXT_ROLES),
-          eq(works.type, 'document'),
+          eq(works.type, type),
         ),
       )
       .orderBy(desc(workContexts.createdAt))
       .limit(limit);
 
+  private listDocumentContextVersions = async (
+    filters: SQL[],
+    limit = 20,
+  ): Promise<DocumentWorkContextVersionItem[]> => {
+    const rows = await this.listSnapshotContextVersionRows<DocumentWorkVersionSnapshot>(
+      'document',
+      filters,
+      limit,
+    );
+
     return rows.map((row) => ({
       ...row.work,
       context: this.toWorkContext(row.context),
-      document: row.document,
+      document: row.snapshot,
       resourceType: 'document' as const,
       type: 'document' as const,
       version: row.version,
@@ -1098,37 +982,16 @@ export class WorkModel {
     filters: SQL[],
     limit = 20,
   ): Promise<LinearWorkContextVersionItem[]> => {
-    const rows = await this.db
-      .select({
-        context: workContexts,
-        linear: sql<LinearWorkVersionSnapshot>`${workVersions.snapshot}->'linear'`,
-        version: {
-          createdAt: workVersions.createdAt,
-          cumulativeCost: workVersions.cumulativeCost,
-          id: workVersions.id,
-          title: workVersions.title,
-          version: workVersions.version,
-        },
-        work: works,
-      })
-      .from(workContexts)
-      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
-      .innerJoin(workVersions, eq(workContexts.versionId, workVersions.id))
-      .where(
-        and(
-          this.contextOwnership(),
-          ...filters,
-          inArray(workContexts.role, VERSION_CONTEXT_ROLES),
-          eq(works.type, 'linear'),
-        ),
-      )
-      .orderBy(desc(workContexts.createdAt))
-      .limit(limit);
+    const rows = await this.listSnapshotContextVersionRows<LinearWorkVersionSnapshot>(
+      'linear',
+      filters,
+      limit,
+    );
 
     return rows.map((row) => ({
       ...row.work,
       context: this.toWorkContext(row.context),
-      linear: row.linear,
+      linear: row.snapshot,
       resourceType: row.work.resourceType as LinearWorkListItem['resourceType'],
       type: 'linear' as const,
       version: row.version,
@@ -1139,37 +1002,16 @@ export class WorkModel {
     filters: SQL[],
     limit = 20,
   ): Promise<GithubWorkContextVersionItem[]> => {
-    const rows = await this.db
-      .select({
-        context: workContexts,
-        github: sql<GithubWorkVersionSnapshot>`${workVersions.snapshot}->'github'`,
-        version: {
-          createdAt: workVersions.createdAt,
-          cumulativeCost: workVersions.cumulativeCost,
-          id: workVersions.id,
-          title: workVersions.title,
-          version: workVersions.version,
-        },
-        work: works,
-      })
-      .from(workContexts)
-      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
-      .innerJoin(workVersions, eq(workContexts.versionId, workVersions.id))
-      .where(
-        and(
-          this.contextOwnership(),
-          ...filters,
-          inArray(workContexts.role, VERSION_CONTEXT_ROLES),
-          eq(works.type, 'github'),
-        ),
-      )
-      .orderBy(desc(workContexts.createdAt))
-      .limit(limit);
+    const rows = await this.listSnapshotContextVersionRows<GithubWorkVersionSnapshot>(
+      'github',
+      filters,
+      limit,
+    );
 
     return rows.map((row) => ({
       ...row.work,
       context: this.toWorkContext(row.context),
-      github: row.github,
+      github: row.snapshot,
       resourceType: row.work.resourceType as GithubWorkListItem['resourceType'],
       type: 'github' as const,
       version: row.version,
@@ -1200,31 +1042,44 @@ export class WorkModel {
     if (rootOperationIds.length === 0) return {};
 
     const limit = params.limit ?? 20;
-    const result: WorkContextVersionMap = {};
-    const entries = await Promise.all(
-      rootOperationIds.map(async (rootOperationId) => {
-        const filters = [eq(workContexts.rootOperationId, rootOperationId)];
-        const [taskItems, documentItems, linearItems, githubItems] = await Promise.all([
-          this.listTaskContextVersions(filters, limit),
-          this.listDocumentContextVersions(filters, limit),
-          this.listLinearContextVersions(filters, limit),
-          this.listGithubContextVersions(filters, limit),
-        ]);
-        const items = [...taskItems, ...documentItems, ...linearItems, ...githubItems]
-          .sort((a, b) => b.context.createdAt.getTime() - a.context.createdAt.getTime())
-          .slice(0, limit);
+    const result: WorkContextVersionMap = Object.fromEntries(
+      rootOperationIds.map((rootOperationId) => [rootOperationId, []]),
+    );
+    // One batched query per work type across all ids (instead of 4 queries per
+    // id); rows are re-partitioned per rootOperationId below. Each per-type
+    // query over-fetches up to `limit` rows per id, clamped like the sibling
+    // listSummariesByRootOperations.
+    const filters = [inArray(workContexts.rootOperationId, rootOperationIds)];
+    const rowLimit = Math.min(rootOperationIds.length * limit, MAX_SUMMARY_ROW_LIMIT);
+    const [taskItems, documentItems, linearItems, githubItems] = await Promise.all([
+      this.listTaskContextVersions(filters, rowLimit),
+      this.listDocumentContextVersions(filters, rowLimit),
+      this.listLinearContextVersions(filters, rowLimit),
+      this.listGithubContextVersions(filters, rowLimit),
+    ]);
 
-        return [rootOperationId, items] as const;
-      }),
+    const items = [...taskItems, ...documentItems, ...linearItems, ...githubItems].sort(
+      (a, b) => b.context.createdAt.getTime() - a.context.createdAt.getTime(),
     );
 
-    for (const [rootOperationId, items] of entries) {
-      result[rootOperationId] = items;
+    for (const item of items) {
+      const rootOperationId = item.context.rootOperationId;
+      if (!rootOperationId || !(rootOperationId in result)) continue;
+      if (result[rootOperationId].length >= limit) continue;
+      result[rootOperationId].push(item);
     }
 
     return result;
   };
 
+  /**
+   * `cumulativeCost` is a running snapshot of the whole operation's spend at
+   * the time each version was written (see schemas/work.ts), not a per-version
+   * delta — so versions produced by the same root operation must not be added
+   * together (v2 already contains v1's spend). Take MAX per operation, then
+   * sum across operations. Versions without a rootOperationId are treated as
+   * independent operations.
+   */
   private getTotalCostByWorkIds = async (workIds: string[]) => {
     const ids = Array.from(new Set(workIds));
     const result = new Map<string, number | null>();
@@ -1232,16 +1087,39 @@ export class WorkModel {
 
     const rows = await this.db
       .select({
-        costCount: sql<number>`COUNT(${workVersions.cumulativeCost})`.mapWith(Number),
-        totalCost: sql<number>`COALESCE(SUM(${workVersions.cumulativeCost}), 0)`.mapWith(Number),
+        cumulativeCost: workVersions.cumulativeCost,
+        rootOperationId: workContexts.rootOperationId,
+        versionId: workVersions.id,
         workId: workVersions.workId,
       })
       .from(workVersions)
-      .where(inArray(workVersions.workId, ids))
-      .groupBy(workVersions.workId);
+      .leftJoin(
+        workContexts,
+        and(
+          eq(workContexts.versionId, workVersions.id),
+          inArray(workContexts.role, VERSION_CONTEXT_ROLES),
+        ),
+      )
+      .where(inArray(workVersions.workId, ids));
 
+    const maxCostByOperation = new Map<string, Map<string, number>>();
+    const seenVersionIds = new Set<string>();
     for (const row of rows) {
-      result.set(row.workId, row.costCount > 0 ? row.totalCost : null);
+      // A version can join multiple context rows; count its cost once.
+      if (seenVersionIds.has(row.versionId)) continue;
+      seenVersionIds.add(row.versionId);
+      if (row.cumulativeCost === null) continue;
+
+      const operationKey = row.rootOperationId ?? row.versionId;
+      const operations = maxCostByOperation.get(row.workId) ?? new Map<string, number>();
+      operations.set(operationKey, Math.max(operations.get(operationKey) ?? 0, row.cumulativeCost));
+      maxCostByOperation.set(row.workId, operations);
+    }
+
+    for (const [workId, operations] of maxCostByOperation) {
+      let totalCost = 0;
+      for (const cost of operations.values()) totalCost += cost;
+      result.set(workId, totalCost);
     }
 
     return result;
@@ -1303,14 +1181,19 @@ export class WorkModel {
     }));
   };
 
-  private listDocumentWorkSummaryRows = async (
+  /**
+   * Shared current-version summary query for snapshot-backed work types;
+   * `task` keeps its own variant because it additionally joins the tasks table.
+   */
+  private listSnapshotWorkSummaryRows = <Snapshot>(
+    type: SnapshotWorkType,
     filters: SQL[],
     rowLimit: number,
-  ): Promise<DocumentWorkSummaryQueryRow[]> =>
+  ): Promise<SnapshotWorkSummaryQueryRow<Snapshot>[]> =>
     this.db
       .select({
         context: workContexts,
-        document: sql<DocumentWorkVersionSnapshot>`${workVersions.snapshot}->'document'`,
+        snapshot: snapshotField<Snapshot>(type),
         version: {
           createdAt: workVersions.createdAt,
           id: workVersions.id,
@@ -1327,51 +1210,30 @@ export class WorkModel {
           this.contextOwnership(),
           ...filters,
           inArray(workContexts.role, VERSION_CONTEXT_ROLES),
-          eq(works.type, 'document'),
+          eq(works.type, type),
         ),
       )
       .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
       .limit(rowLimit);
 
-  private listLinearWorkSummaryRows = async (
-    filters: SQL[],
-    rowLimit: number,
-  ): Promise<LinearWorkSummaryQueryRow[]> =>
-    this.db
-      .select({
-        context: workContexts,
-        linear: sql<LinearWorkVersionSnapshot>`${workVersions.snapshot}->'linear'`,
-        version: {
-          createdAt: workVersions.createdAt,
-          id: workVersions.id,
-          title: workVersions.title,
-          version: workVersions.version,
-        },
-        work: works,
-      })
-      .from(workContexts)
-      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
-      .innerJoin(workVersions, eq(works.currentVersionId, workVersions.id))
-      .where(
-        and(
-          this.contextOwnership(),
-          ...filters,
-          inArray(workContexts.role, VERSION_CONTEXT_ROLES),
-          eq(works.type, 'linear'),
-        ),
-      )
-      .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
-      .limit(rowLimit);
+  private listDocumentWorkSummaryRows = (filters: SQL[], rowLimit: number) =>
+    this.listSnapshotWorkSummaryRows<DocumentWorkVersionSnapshot>('document', filters, rowLimit);
+
+  private listLinearWorkSummaryRows = (filters: SQL[], rowLimit: number) =>
+    this.listSnapshotWorkSummaryRows<LinearWorkVersionSnapshot>('linear', filters, rowLimit);
+
+  private listGithubWorkSummaryRows = (filters: SQL[], rowLimit: number) =>
+    this.listSnapshotWorkSummaryRows<GithubWorkVersionSnapshot>('github', filters, rowLimit);
 
   private toDocumentWorkSummaries = async (
-    rows: DocumentWorkSummaryQueryRow[],
+    rows: SnapshotWorkSummaryQueryRow<DocumentWorkVersionSnapshot>[],
   ): Promise<DocumentWorkSummaryItem[]> => {
     const costByWorkId = await this.getTotalCostByWorkIds(rows.map((row) => row.work.id));
 
     return rows.map((row) => ({
       ...row.work,
       context: this.toWorkContext(row.context),
-      document: row.document,
+      document: row.snapshot,
       resourceType: 'document' as const,
       totalCost: costByWorkId.get(row.work.id) ?? null,
       type: 'document' as const,
@@ -1380,14 +1242,14 @@ export class WorkModel {
   };
 
   private toLinearWorkSummaries = async (
-    rows: LinearWorkSummaryQueryRow[],
+    rows: SnapshotWorkSummaryQueryRow<LinearWorkVersionSnapshot>[],
   ): Promise<LinearWorkSummaryItem[]> => {
     const costByWorkId = await this.getTotalCostByWorkIds(rows.map((row) => row.work.id));
 
     return rows.map((row) => ({
       ...row.work,
       context: this.toWorkContext(row.context),
-      linear: row.linear,
+      linear: row.snapshot,
       resourceType: row.work.resourceType as LinearWorkSummaryItem['resourceType'],
       totalCost: costByWorkId.get(row.work.id) ?? null,
       type: 'linear' as const,
@@ -1395,45 +1257,15 @@ export class WorkModel {
     }));
   };
 
-  private listGithubWorkSummaryRows = async (
-    filters: SQL[],
-    rowLimit: number,
-  ): Promise<GithubWorkSummaryQueryRow[]> =>
-    this.db
-      .select({
-        context: workContexts,
-        github: sql<GithubWorkVersionSnapshot>`${workVersions.snapshot}->'github'`,
-        version: {
-          createdAt: workVersions.createdAt,
-          id: workVersions.id,
-          title: workVersions.title,
-          version: workVersions.version,
-        },
-        work: works,
-      })
-      .from(workContexts)
-      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
-      .innerJoin(workVersions, eq(works.currentVersionId, workVersions.id))
-      .where(
-        and(
-          this.contextOwnership(),
-          ...filters,
-          inArray(workContexts.role, VERSION_CONTEXT_ROLES),
-          eq(works.type, 'github'),
-        ),
-      )
-      .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
-      .limit(rowLimit);
-
   private toGithubWorkSummaries = async (
-    rows: GithubWorkSummaryQueryRow[],
+    rows: SnapshotWorkSummaryQueryRow<GithubWorkVersionSnapshot>[],
   ): Promise<GithubWorkSummaryItem[]> => {
     const costByWorkId = await this.getTotalCostByWorkIds(rows.map((row) => row.work.id));
 
     return rows.map((row) => ({
       ...row.work,
       context: this.toWorkContext(row.context),
-      github: row.github,
+      github: row.snapshot,
       resourceType: row.work.resourceType as GithubWorkSummaryItem['resourceType'],
       totalCost: costByWorkId.get(row.work.id) ?? null,
       type: 'github' as const,
@@ -1469,7 +1301,10 @@ export class WorkModel {
 
     const limit = params.limit ?? 20;
     const filters = [inArray(workContexts.rootOperationId, rootOperationIds)];
-    const rowLimit = rootOperationIds.length * limit * 4;
+    const rowLimit = Math.min(
+      rootOperationIds.length * limit * WORK_TYPE_FANOUT,
+      MAX_SUMMARY_ROW_LIMIT,
+    );
     const [taskRows, documentRows, linearRows, githubRows] = await Promise.all([
       this.listTaskWorkSummaryRows(filters, rowLimit),
       this.listDocumentWorkSummaryRows(filters, rowLimit),
@@ -1508,10 +1343,10 @@ export class WorkModel {
       : isNull(workContexts.threadId);
     const filters = [eq(workContexts.topicId, params.topicId), threadFilter];
     const [taskRows, documentRows, linearRows, githubRows] = await Promise.all([
-      this.listTaskWorkSummaryRows(filters, limit * 4),
-      this.listDocumentWorkSummaryRows(filters, limit * 4),
-      this.listLinearWorkSummaryRows(filters, limit * 4),
-      this.listGithubWorkSummaryRows(filters, limit * 4),
+      this.listTaskWorkSummaryRows(filters, limit * WORK_TYPE_FANOUT),
+      this.listDocumentWorkSummaryRows(filters, limit * WORK_TYPE_FANOUT),
+      this.listLinearWorkSummaryRows(filters, limit * WORK_TYPE_FANOUT),
+      this.listGithubWorkSummaryRows(filters, limit * WORK_TYPE_FANOUT),
     ]);
 
     return this.latestSummaryItemsByWork(
@@ -1560,7 +1395,7 @@ export class WorkModel {
         ),
       )
       .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
-      .limit(limit * 4);
+      .limit(limit * WORK_TYPE_FANOUT);
 
     const documentRows = await this.db
       .select({
@@ -1580,7 +1415,7 @@ export class WorkModel {
         ),
       )
       .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
-      .limit(limit * 4);
+      .limit(limit * WORK_TYPE_FANOUT);
 
     const linearRows = await this.db
       .select({
@@ -1600,7 +1435,7 @@ export class WorkModel {
         ),
       )
       .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
-      .limit(limit * 4);
+      .limit(limit * WORK_TYPE_FANOUT);
 
     const githubRows = await this.db
       .select({
@@ -1620,7 +1455,7 @@ export class WorkModel {
         ),
       )
       .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
-      .limit(limit * 4);
+      .limit(limit * WORK_TYPE_FANOUT);
 
     const seen = new Set<string>();
     const items: WorkListItem[] = [];

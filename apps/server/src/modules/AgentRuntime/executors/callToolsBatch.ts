@@ -1,6 +1,7 @@
 import {
   type AgentEvent,
   type AgentInstruction,
+  type AgentState,
   executeToolWithRetry,
   extractActivatedSkillsFromMessages,
   type InstructionExecutor,
@@ -322,8 +323,8 @@ export const callToolsBatch =
                     taskId: state.metadata?.taskId,
                     threadId: state.metadata?.threadId,
                     toolCallId: chatToolPayload.id,
-                    toolMessageId: undefined,
                     toolManifestMap: batchManifestMap,
+                    toolMessageId: undefined,
                     toolResultMaxLength: batchAgentConfig?.chatConfig?.toolResultMaxLength,
                     topicId: ctx.topicId,
                     userId: ctx.userId,
@@ -550,6 +551,10 @@ export const callToolsBatch =
 
     // Accumulate tool usage sequentially after all tools have finished
     const newState = structuredClone(state);
+    const cumulativeUsageUpdates: {
+      state: Pick<AgentState, 'cost' | 'usage'>;
+      toolCallId: string;
+    }[] = [];
     for (const result of toolResults) {
       if (result.usageParams) {
         const { usage, cost } = UsageCounter.accumulateTool({
@@ -560,16 +565,27 @@ export const callToolsBatch =
         newState.usage = usage;
         if (cost) newState.cost = cost;
 
-        await updateWorkVersionCumulativeUsage({
-          rootOperationId: operationId,
-          serverDB: ctx.serverDB,
-          sourceToolCallId: result.toolCallId,
-          state: newState,
-          userId: ctx.userId,
-          workspaceId: state.metadata?.workspaceId ?? ctx.workspaceId,
+        // Snapshot the running totals as of this tool call; the DB writes are
+        // fired together below so the batch doesn't pay one sequential round
+        // trip per tool (each update targets its own sourceToolCallId row).
+        cumulativeUsageUpdates.push({
+          state: { cost: newState.cost, usage: newState.usage },
+          toolCallId: result.toolCallId,
         });
       }
     }
+    await Promise.all(
+      cumulativeUsageUpdates.map((update) =>
+        updateWorkVersionCumulativeUsage({
+          rootOperationId: operationId,
+          serverDB: ctx.serverDB,
+          sourceToolCallId: update.toolCallId,
+          state: update.state,
+          userId: ctx.userId,
+          workspaceId: state.metadata?.workspaceId ?? ctx.workspaceId,
+        }),
+      ),
+    );
 
     // Persist ToolsActivator discovery results from batch tool executions
     const batchEffectiveManifestMap = {

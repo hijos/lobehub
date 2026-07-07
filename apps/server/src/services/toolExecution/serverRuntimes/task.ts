@@ -82,7 +82,9 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
     rootOperationId,
     scope,
     taskId,
+    threadId,
     toolCallId,
+    toolMessageId,
     topicId,
   } = deps;
   // Models are read through `deps` (not destructured) so callers can swap them
@@ -108,19 +110,28 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
       await model.registerTask({
         actorAgentId: agentId,
         role: params.role,
-        rootOperationId: deps.rootOperationId ?? deps.operationId,
+        rootOperationId: rootOperationId ?? operationId,
         source: params.source,
-        sourceMessageId: deps.toolMessageId,
-        sourceToolCallId: deps.toolCallId,
+        sourceMessageId: toolMessageId,
+        sourceToolCallId: toolCallId,
         sourceType: 'tool',
         taskId: params.taskId,
         taskIdentifier: params.taskIdentifier,
-        threadId: deps.threadId,
+        threadId,
         title: params.title,
-        topicId: deps.topicId,
+        topicId,
       });
     } catch (error) {
-      console.error('[TaskRuntime] register task work failed:', error);
+      console.error(
+        '[TaskRuntime] register task work failed:',
+        {
+          rootOperationId: rootOperationId ?? operationId,
+          sourceToolCallId: toolCallId,
+          taskId: params.taskId,
+          taskIdentifier: params.taskIdentifier,
+        },
+        error,
+      );
     }
   };
 
@@ -273,12 +284,13 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
       }
 
       const results: TaskCreatedItem[] = [];
+      const registrations: Parameters<typeof registerTaskWork>[0][] = [];
 
       for (const item of items) {
         try {
           const result = await createTaskImpl(item);
           if (result.success) {
-            await registerTaskWork({
+            registrations.push({
               role: 'created',
               source: TaskApiName.createTasks,
               taskId: result.taskId,
@@ -296,6 +308,13 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
           const message = error instanceof Error ? error.message : 'Unknown error';
           results.push({ error: message, name: item.name, success: false });
         }
+      }
+
+      // Work registration is best-effort bookkeeping (errors are swallowed
+      // inside registerTaskWork), so run all registrations concurrently instead
+      // of paying sequential DB round trips per created task.
+      if (registrations.length > 0) {
+        await Promise.all(registrations.map((registration) => registerTaskWork(registration)));
       }
 
       const failed = results.filter((r) => !r.success).length;
@@ -432,6 +451,10 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
               changes.push(formatDependencyRemoved(task.identifier, depIdentifier)),
           ),
         );
+      }
+
+      if (ops.length === 0 && depResults.length === 0) {
+        return { content: 'No fields provided; nothing to update.', success: false };
       }
 
       const [, depErrors] = await Promise.all([Promise.all(ops), Promise.all(depResults)]);

@@ -521,6 +521,29 @@ describe('createTaskRuntime', () => {
         }),
       );
     });
+
+    it('returns failure without registering a work version when no fields are provided', async () => {
+      const deps = makeDeps();
+      const workModel = {
+        registerTask: vi.fn().mockResolvedValue({ id: 'work-1' }),
+      };
+
+      const runtime = createTaskRuntime({
+        agentModel: deps.agentModel as any,
+        agentId: 'agt-manager',
+        taskCaller: deps.taskCaller,
+        taskModel: deps.taskModel as any,
+        taskService: deps.taskService as any,
+        workModel: workModel as any,
+      });
+
+      const result = await runtime.editTask({ identifier: 'T-1' });
+
+      expect(result.success).toBe(false);
+      expect(result.content).toBe('No fields provided; nothing to update.');
+      expect(deps.taskCaller.update).not.toHaveBeenCalled();
+      expect(workModel.registerTask).not.toHaveBeenCalled();
+    });
   });
 
   describe('listTasks', () => {

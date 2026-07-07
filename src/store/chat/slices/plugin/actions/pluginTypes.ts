@@ -9,7 +9,7 @@ import { type MCPToolCallResult } from '@/libs/mcp';
 import { mcpService } from '@/services/mcp';
 import { messageService } from '@/services/message';
 import { archiveToolResultViaServer } from '@/services/toolResultArchive';
-import { AI_RUNTIME_OPERATION_TYPES } from '@/store/chat/slices/operation';
+import { operationSelectors } from '@/store/chat/slices/operation';
 import { type ChatStore } from '@/store/chat/store';
 import { useToolStore } from '@/store/tool';
 import { composioStoreSelectors, lobehubSkillStoreSelectors } from '@/store/tool/selectors';
@@ -90,21 +90,11 @@ export class PluginTypesActionImpl {
       const operation = operationId ? this.#get().operations[operationId] : undefined;
       const context = operationId ? { operationId } : undefined;
 
-      let rootRuntimeOperationId: string | undefined;
-      let rootRuntimeOperationContext = operation?.context;
-      if (operationId) {
-        let currentOp = operation;
-        while (currentOp) {
-          if (AI_RUNTIME_OPERATION_TYPES.includes(currentOp.type)) {
-            rootRuntimeOperationId = currentOp.id;
-            rootRuntimeOperationContext = currentOp.context;
-            break;
-          }
-          // Move up to parent operation
-          const parentId = currentOp.parentOperationId;
-          currentOp = parentId ? this.#get().operations[parentId] : undefined;
-        }
-      }
+      const rootRuntimeOperation = operationId
+        ? operationSelectors.findRootRuntimeOperation(operationId)(this.#get())
+        : undefined;
+      const rootRuntimeOperationId = rootRuntimeOperation?.id;
+      const rootRuntimeOperationContext = rootRuntimeOperation?.context ?? operation?.context;
 
       // Get agent ID, group ID, topic ID, and page scope from operation context.
       // Prefer the concrete tool operation; fall back to the runtime root for
@@ -407,21 +397,11 @@ export class PluginTypesActionImpl {
     const operationId = this.#get().messageOperationMap[id];
     const operation = operationId ? this.#get().operations[operationId] : undefined;
     const abortController = operation?.abortController;
-    let rootRuntimeOperationId: string | undefined;
-    let rootRuntimeOperationContext = operation?.context;
-    if (operationId) {
-      let currentOp = operation;
-      while (currentOp) {
-        if (AI_RUNTIME_OPERATION_TYPES.includes(currentOp.type)) {
-          rootRuntimeOperationId = currentOp.id;
-          rootRuntimeOperationContext = currentOp.context;
-          break;
-        }
-
-        const parentId = currentOp.parentOperationId;
-        currentOp = parentId ? this.#get().operations[parentId] : undefined;
-      }
-    }
+    const rootRuntimeOperation = operationId
+      ? operationSelectors.findRootRuntimeOperation(operationId)(this.#get())
+      : undefined;
+    const rootRuntimeOperationId = rootRuntimeOperation?.id;
+    const rootRuntimeOperationContext = rootRuntimeOperation?.context ?? operation?.context;
 
     log(
       '[%s] messageId=%s, tool=%s, operationId=%s, aborted=%s',

@@ -9,6 +9,7 @@ import { topicSelectors } from '@/store/chat/selectors';
 
 import { type State } from '../../initialState';
 import { getPendingInterventions } from './pendingInterventions';
+import { getWorkRootOperationIds } from './workRootOperationIds';
 
 const displayMessages = (s: State) => s.displayMessages;
 const displayMessageIds = (s: State) => s.displayMessages.map((m) => m.id);
@@ -126,6 +127,8 @@ const currentTopicSummary = () => {
 
 const pendingInterventions = (s: State) => getPendingInterventions(s.displayMessages);
 
+const workRootOperationIds = (s: State) => getWorkRootOperationIds(s.displayMessages);
+
 const isSecondLastMessageFromUser = (s: State) => s.displayMessages.at(-2)?.role === 'user';
 
 const toAssistantContentBlock = (message: UIChatMessage): AssistantContentBlock => ({
@@ -239,4 +242,5 @@ export const dataSelectors = {
   messagesInit,
   pendingInterventions,
   skipFetch,
+  workRootOperationIds,
 };

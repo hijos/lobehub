@@ -3,7 +3,7 @@
 import type { WorkSummaryItem } from '@lobechat/types';
 import { Github } from '@lobehub/icons';
 import { Flexbox, Text } from '@lobehub/ui';
-import { createStaticStyles } from 'antd-style';
+import { createStaticStyles, cx } from 'antd-style';
 import { ClipboardListIcon, FileTextIcon } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -15,8 +15,6 @@ import LinearIcon from './icons/LinearIcon';
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
   card: css`
-    cursor: pointer;
-
     overflow: hidden;
 
     width: 100%;
@@ -26,6 +24,9 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
     border-radius: 8px;
 
     background: ${cssVar.colorBgElevated};
+  `,
+  clickable: css`
+    cursor: pointer;
 
     &:hover {
       background: ${cssVar.colorFillQuaternary};
@@ -84,19 +85,18 @@ const WorkSummaryCard = memo<WorkSummaryCardProps>(({ className, item }) => {
       : isGithub
         ? Github
         : ClipboardListIcon;
+  // Linear/github works registered from CLI results may carry no URL — those
+  // cards have nothing to open, so drop the click affordance entirely.
+  const externalUrl = isLinear ? item.linear.url : isGithub ? item.github.url : undefined;
+  const clickable = isDocument || (!isLinear && !isGithub) || !!externalUrl;
   const handleOpen = () => {
     if (isDocument) {
       openDocument(item.document.id, item.context.metadata?.agentDocumentId);
       return;
     }
 
-    if (isLinear) {
-      if (item.linear.url) window.open(item.linear.url, '_blank', 'noopener,noreferrer');
-      return;
-    }
-
-    if (isGithub) {
-      if (item.github.url) window.open(item.github.url, '_blank', 'noopener,noreferrer');
+    if (isLinear || isGithub) {
+      if (externalUrl) window.open(externalUrl, '_blank', 'noopener,noreferrer');
       return;
     }
 
@@ -107,9 +107,9 @@ const WorkSummaryCard = memo<WorkSummaryCardProps>(({ className, item }) => {
     <Flexbox
       horizontal
       align={'center'}
-      className={[styles.card, className].filter(Boolean).join(' ')}
+      className={cx(styles.card, clickable && styles.clickable, className)}
       gap={12}
-      onClick={handleOpen}
+      onClick={clickable ? handleOpen : undefined}
     >
       <Flexbox align={'center'} className={styles.icon} justify={'center'}>
         <Icon size={18} />

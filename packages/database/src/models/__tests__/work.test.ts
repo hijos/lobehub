@@ -22,7 +22,6 @@ import {
   threads,
   topics,
   users,
-  workContexts,
   works,
   workVersions,
 } from '../../schemas';
@@ -142,7 +141,7 @@ afterEach(async () => {
 });
 
 describe('WorkModel', () => {
-  it('registers a task work with v1 and conversation context', async () => {
+  it('registers a task work with v1 carrying the attribution fields', async () => {
     const taskModel = new TaskModel(serverDB, userId);
     const workModel = new WorkModel(serverDB, userId);
     const task = await taskModel.create({
@@ -187,8 +186,13 @@ describe('WorkModel', () => {
     const versions = await workModel.listVersions(work!.id);
     expect(versions).toHaveLength(1);
     expect(versions[0]).toMatchObject({
-      context: expect.objectContaining({ role: 'created', source: 'createTask' }),
-      title: 'Work MVP plan',
+      role: 'created',
+      rootOperationId: 'op-root',
+      source: 'createTask',
+      sourceMessageId: 'msg-tool',
+      sourceToolCallId: 'tool-call-create',
+      threadId,
+      topicId,
       version: 1,
     });
     expect(expectTaskSnapshot(versions[0].snapshot).identifier).toBe(task.identifier);
@@ -197,17 +201,7 @@ describe('WorkModel', () => {
     expect(worksInConversation).toHaveLength(1);
     expect(worksInConversation[0]).toMatchObject({
       id: work?.id,
-      task: { priority: 2, status: 'backlog' },
-    });
-
-    const [context] = await serverDB
-      .select()
-      .from(workContexts)
-      .where(eq(workContexts.workId, work!.id));
-    expect(context).toMatchObject({
-      rootOperationId: 'op-root',
-      sourceMessageId: 'msg-tool',
-      sourceToolCallId: 'tool-call-create',
+      task: { name: 'Work MVP plan', priority: 2, status: 'backlog' },
     });
 
     const byOperation = await workModel.listByRootOperation({ rootOperationId: 'op-root' });
@@ -219,16 +213,16 @@ describe('WorkModel', () => {
     });
     expect(byOperations['op-root']).toHaveLength(1);
     expect(byOperations['op-root']?.[0]).toMatchObject({
-      context: expect.objectContaining({
+      id: work?.id,
+      version: expect.objectContaining({
         rootOperationId: 'op-root',
         sourceMessageId: 'msg-tool',
       }),
-      id: work?.id,
     });
     expect(byOperations['op-missing']).toEqual([]);
   });
 
-  it('groups context versions by root operation', async () => {
+  it('groups version events by root operation', async () => {
     const taskModel = new TaskModel(serverDB, userId);
     const workModel = new WorkModel(serverDB, userId);
     const firstTask = await taskModel.create({
@@ -369,22 +363,22 @@ describe('WorkModel', () => {
     });
 
     expect(second?.id).toBe(first?.id);
-    expect(second?.title).toBe('Updated title');
 
     const workRows = await serverDB.select().from(works).where(eq(works.resourceId, task.id));
     expect(workRows).toHaveLength(1);
 
     const versions = await workModel.listVersions(first!.id);
     expect(versions.map((item) => item.version)).toEqual([2, 1]);
-    expect(versions[0].context?.role).toBe('updated');
-    expect(versions[0].context?.id).toBeTruthy();
+    expect(versions[0].role).toBe('updated');
+    expect(versions[0].id).toBeTruthy();
     expect(expectTaskSnapshot(versions[0].snapshot).instruction).toBe('Updated instruction');
+    expect(expectTaskSnapshot(versions[0].snapshot).name).toBe('Updated title');
 
-    const [updatedContext] = await serverDB
+    const [updatedVersion] = await serverDB
       .select()
-      .from(workContexts)
-      .where(eq(workContexts.sourceToolCallId, 'tool-call-edit'));
-    expect(updatedContext.sourceMessageId).toBe('msg-tool-edit');
+      .from(workVersions)
+      .where(eq(workVersions.sourceToolCallId, 'tool-call-edit'));
+    expect(updatedVersion.sourceMessageId).toBe('msg-tool-edit');
   });
 
   it('summarizes a task work on its latest operation with total version cost', async () => {
@@ -428,12 +422,13 @@ describe('WorkModel', () => {
     expect(pendingByOperation['op-summary-edit']).toHaveLength(1);
     const pendingSummary = expectTaskSummaryItem(pendingByOperation['op-summary-edit']?.[0]);
     expect(pendingSummary).toMatchObject({
-      context: expect.objectContaining({ role: 'updated', rootOperationId: 'op-summary-edit' }),
+      event: expect.objectContaining({ role: 'updated', rootOperationId: 'op-summary-edit' }),
       id: first?.id,
-      title: 'Updated title',
+      task: expect.objectContaining({ name: 'Updated title' }),
       totalCost: null,
-      version: expect.objectContaining({ title: 'Updated title', version: 2 }),
+      version: expect.objectContaining({ version: 2 }),
     });
+    // Summary description comes from the current version snapshot, not the live task row.
     expect(pendingSummary.task.description).toBe('Updated description');
 
     await workModel.updateVersionCumulativeUsage({
@@ -463,9 +458,9 @@ describe('WorkModel', () => {
     const byConversation = await workModel.listSummariesByConversation({ topicId });
     expect(byConversation).toHaveLength(1);
     expect(byConversation[0]).toMatchObject({
-      context: expect.objectContaining({ role: 'updated', rootOperationId: 'op-summary-edit' }),
+      event: expect.objectContaining({ role: 'updated', rootOperationId: 'op-summary-edit' }),
       id: first?.id,
-      version: expect.objectContaining({ title: 'Updated title', version: 2 }),
+      version: expect.objectContaining({ version: 2 }),
     });
     expect(byConversation[0].totalCost).toBeCloseTo(0.000_987, 6);
   });
@@ -651,7 +646,6 @@ describe('WorkModel', () => {
       rootOperationId: 'op-doc-create',
       source: 'createDocument',
       sourceToolCallId: 'tool-call-doc-create',
-      title: doc.title,
       topicId,
       url: 'https://app.example.com/agent/agent-1/docs/doc-1',
     });
@@ -661,7 +655,6 @@ describe('WorkModel', () => {
       resourceId: doc.documentId,
       resourceIdentifier: 'research.md',
       resourceType: 'document',
-      title: 'Research Notes',
       type: 'document',
     });
 
@@ -675,13 +668,7 @@ describe('WorkModel', () => {
         url: 'https://app.example.com/agent/agent-1/docs/doc-1',
       },
     });
-    expect(versions[0].context?.metadata).toEqual({ agentDocumentId: doc.id });
-
-    const [context] = await serverDB
-      .select()
-      .from(workContexts)
-      .where(eq(workContexts.workId, work!.id));
-    expect(context).toMatchObject({
+    expect(versions[0]).toMatchObject({
       metadata: { agentDocumentId: doc.id },
       rootOperationId: 'op-doc-create',
       sourceToolCallId: 'tool-call-doc-create',
@@ -698,10 +685,10 @@ describe('WorkModel', () => {
       rootOperationIds: ['op-doc-create'],
     });
     expect(summaries['op-doc-create']?.[0]).toMatchObject({
-      context: expect.objectContaining({
+      document: expect.objectContaining({ description: 'Research notes', id: doc.documentId }),
+      event: expect.objectContaining({
         metadata: { agentDocumentId: doc.id },
       }),
-      document: expect.objectContaining({ description: 'Research notes', id: doc.documentId }),
       id: work?.id,
       type: 'document',
     });
@@ -729,7 +716,6 @@ describe('WorkModel', () => {
       rootOperationId: 'op-doc-empty-description',
       source: 'createDocument',
       sourceToolCallId: 'tool-call-doc-empty-description',
-      title: doc.title,
       topicId,
     });
 
@@ -770,7 +756,6 @@ describe('WorkModel', () => {
       rootOperationId: 'op-doc-clamp',
       source: 'createDocument',
       sourceToolCallId: 'tool-call-doc-clamp',
-      title: doc.title,
       topicId,
     });
 
@@ -804,7 +789,6 @@ describe('WorkModel', () => {
       rootOperationId: 'op-doc-create',
       source: 'createDocument',
       sourceToolCallId: 'tool-call-doc-create',
-      title: 'Draft',
       topicId,
     });
 
@@ -818,7 +802,6 @@ describe('WorkModel', () => {
       rootOperationId: 'op-doc-rename',
       source: 'renameDocument',
       sourceToolCallId: 'tool-call-doc-rename',
-      title: 'Renamed Draft',
       topicId,
     });
 
@@ -830,7 +813,6 @@ describe('WorkModel', () => {
       rootOperationId: 'op-doc-rename',
       source: 'renameDocument',
       sourceToolCallId: 'tool-call-doc-rename',
-      title: 'Renamed Draft',
       topicId,
     });
 
@@ -848,15 +830,9 @@ describe('WorkModel', () => {
     expect(versions[0].snapshot).toMatchObject({
       document: { id: doc.documentId, title: 'Renamed Draft' },
     });
-
-    const contexts = await serverDB
-      .select()
-      .from(workContexts)
-      .where(eq(workContexts.workId, first!.id));
-    expect(contexts).toHaveLength(2);
   });
 
-  it('deletes document work and cascades versions and contexts when agent document is removed', async () => {
+  it('deletes document work and cascades versions when agent document is removed', async () => {
     const agentDocumentModel = new AgentDocumentModel(serverDB, userId);
     const workModel = new WorkModel(serverDB, userId);
     const doc = await agentDocumentModel.create(agentId, 'delete.md', 'Delete body', {
@@ -870,7 +846,6 @@ describe('WorkModel', () => {
       role: 'created',
       source: 'createDocument',
       sourceToolCallId: 'tool-call-doc-delete',
-      title: doc.title,
     });
 
     await agentDocumentModel.delete(doc.id);
@@ -885,14 +860,9 @@ describe('WorkModel', () => {
       .select()
       .from(workVersions)
       .where(eq(workVersions.workId, work!.id));
-    const contextRows = await serverDB
-      .select()
-      .from(workContexts)
-      .where(eq(workContexts.workId, work!.id));
 
     expect(workRows).toHaveLength(0);
     expect(versionRows).toHaveLength(0);
-    expect(contextRows).toHaveLength(0);
   });
 
   it('does not let another user register someone else document work', async () => {
@@ -907,7 +877,6 @@ describe('WorkModel', () => {
       role: 'created',
       source: 'createDocument',
       sourceToolCallId: 'tool-call-other-doc-user',
-      title: doc.title,
       topicId,
     });
 
@@ -974,16 +943,14 @@ describe('WorkModel', () => {
       resourceId: 'issue-uuid-10966',
       resourceIdentifier: 'LOBE-10966',
       resourceType: 'linear_issue',
-      title: 'Linear Work issue',
       type: 'linear',
     });
 
     const versions = await workModel.listVersions(first!.id);
     expect(versions.map((item) => item.version)).toEqual([2, 1]);
-    expect(versions[0].context?.role).toBe('updated');
+    expect(versions[0].role).toBe('updated');
     expect(expectLinearSnapshot(versions[0].snapshot)).toMatchObject({
       description: 'Track Linear issue as Work',
-      entityType: 'issue',
       id: 'issue-uuid-10966',
       identifier: 'LOBE-10966',
       labels: ['claude code'],
@@ -1012,7 +979,6 @@ describe('WorkModel', () => {
     expect(byOperation['op-linear-issue-create']).toEqual([]);
     const issueSummary = expectLinearSummaryItem(byOperation['op-linear-issue-edit']?.[0]);
     expect(issueSummary.linear).toMatchObject({
-      entityType: 'issue',
       identifier: 'LOBE-10966',
       labels: ['claude code'],
       priority: 'High',
@@ -1023,7 +989,7 @@ describe('WorkModel', () => {
     const byConversation = await workModel.listByConversation({ topicId });
     expect(byConversation).toHaveLength(1);
     expect(byConversation[0]).toMatchObject({
-      linear: expect.objectContaining({ entityType: 'issue' }),
+      linear: expect.objectContaining({ identifier: 'LOBE-10966' }),
       resourceType: 'linear_issue',
       type: 'linear',
     });
@@ -1123,18 +1089,15 @@ describe('WorkModel', () => {
     });
     expect(editedDocument).toMatchObject({
       resourceIdentifier: 'linear-document-8298fa69b2e3',
-      title: 'Linear document updated',
     });
     expect(partialDocumentUpdate).toMatchObject({
       resourceIdentifier: 'linear-document-8298fa69b2e3',
-      title: 'Linear document updated',
     });
 
     const documentVersions = await workModel.listVersions(document!.id);
     expect(documentVersions.map((item) => item.version)).toEqual([3, 2, 1]);
     expect(expectLinearSnapshot(documentVersions[0].snapshot)).toMatchObject({
       content: 'Partial body',
-      entityType: 'document',
       id: 'doc-1',
       identifier: 'linear-document-8298fa69b2e3',
       slugId: '8298fa69b2e3',
@@ -1226,19 +1189,17 @@ describe('WorkModel', () => {
       resourceId: 'lobehub/lobehub#123',
       resourceIdentifier: 'lobehub/lobehub#123',
       resourceType: 'github_issue',
-      title: 'GitHub Work issue',
       type: 'github',
     });
 
     const versions = await workModel.listVersions(first!.id);
     expect(versions.map((item) => item.version)).toEqual([2, 1]);
-    expect(versions[0].context?.role).toBe('updated');
+    expect(versions[0].role).toBe('updated');
     // Partial update responses keep prior snapshot fields (title/body/labels).
     expect(expectGithubSnapshot(versions[0].snapshot)).toMatchObject({
       assignees: ['arvinxx'],
       author: 'yutengjing',
       body: 'Track GitHub issue as Work',
-      entityType: 'issue',
       id: 'lobehub/lobehub#123',
       labels: ['enhancement'],
       number: 123,
@@ -1257,7 +1218,6 @@ describe('WorkModel', () => {
     expect(byOperation['op-github-issue-create']).toEqual([]);
     const issueSummary = expectGithubSummaryItem(byOperation['op-github-issue-edit']?.[0]);
     expect(issueSummary.github).toMatchObject({
-      entityType: 'issue',
       repo: 'lobehub/lobehub',
       state: 'closed',
     });
@@ -1265,7 +1225,7 @@ describe('WorkModel', () => {
     const byConversation = await workModel.listByConversation({ topicId });
     expect(byConversation).toHaveLength(1);
     expect(byConversation[0]).toMatchObject({
-      github: expect.objectContaining({ entityType: 'issue' }),
+      github: expect.objectContaining({ repo: 'lobehub/lobehub' }),
       resourceType: 'github_issue',
       type: 'github',
     });
@@ -1323,7 +1283,6 @@ describe('WorkModel', () => {
       resourceId: 'lobehub/lobehub#456',
       resourceIdentifier: 'lobehub/lobehub#456',
       resourceType: 'github_pull_request',
-      title: 'feat: add work registry',
       type: 'github',
     });
 
@@ -1350,7 +1309,6 @@ describe('WorkModel', () => {
     expect(expectGithubSnapshot(versions[0].snapshot)).toMatchObject({
       baseRef: 'canary',
       body: 'Adds the Work registry',
-      entityType: 'pull_request',
       headRef: 'feat/work-registry',
       merged: true,
       number: 456,
@@ -1417,7 +1375,6 @@ describe('WorkModel', () => {
       resourceId: 'lobehub-biz/lobehub-cloud#952',
       resourceIdentifier: 'lobehub-biz/lobehub-cloud#952',
       resourceType: 'github_issue',
-      title: 'CLI Issue',
       type: 'github',
     });
 
@@ -1439,11 +1396,10 @@ describe('WorkModel', () => {
 
     const versions = await workModel.listVersions(created!.id);
     expect(versions.map((item) => item.version)).toEqual([2, 1]);
-    expect(versions[0].context?.role).toBe('updated');
+    expect(versions[0].role).toBe('updated');
     // Patch merge keeps create-time title/state while applying the new body.
     expect(expectGithubSnapshot(versions[0].snapshot)).toMatchObject({
       body: 'updated body',
-      entityType: 'issue',
       number: 952,
       repo: 'lobehub-biz/lobehub-cloud',
       state: 'open',
@@ -1466,15 +1422,14 @@ describe('WorkModel', () => {
     expect(pullRequest).toMatchObject({
       resourceId: 'lobehub-biz/lobehub-cloud#953',
       resourceType: 'github_pull_request',
-      title: 'CLI PR',
     });
     const prVersions = await workModel.listVersions(pullRequest!.id);
     expect(expectGithubSnapshot(prVersions[0].snapshot)).toMatchObject({
       baseRef: 'main',
       draft: true,
-      entityType: 'pull_request',
       headRef: 'feat/cli',
       state: 'open',
+      title: 'CLI PR',
     });
 
     // Failed commands, read-only subcommands, and non-gh commands are skipped.
@@ -1556,14 +1511,14 @@ describe('WorkModel', () => {
     expect(ownerItems).toHaveLength(1);
     expect(ownerItems[0]).toMatchObject({
       id: ownerWork!.id,
+      linear: expect.objectContaining({ title: 'Owner issue title' }),
       resourceId: 'shared-issue-uuid',
-      title: 'Owner issue title',
       type: 'linear',
     });
     expect(otherItems).toHaveLength(1);
     expect(otherItems[0]).toMatchObject({
       id: otherWork!.id,
-      title: 'Other user issue title',
+      linear: expect.objectContaining({ title: 'Other user issue title' }),
       type: 'linear',
     });
   });
@@ -1612,7 +1567,7 @@ describe('WorkModel', () => {
     ).toEqual({ 'op-other-summary': [] });
   });
 
-  it('deletes task work and cascades versions and contexts when the task is deleted', async () => {
+  it('deletes task work and cascades versions when the task is deleted', async () => {
     const taskModel = new TaskModel(serverDB, userId);
     const workModel = new WorkModel(serverDB, userId);
     const task = await taskModel.create({ instruction: 'Delete task work', name: 'Delete me' });
@@ -1634,14 +1589,9 @@ describe('WorkModel', () => {
       .select()
       .from(workVersions)
       .where(eq(workVersions.workId, work!.id));
-    const contextRows = await serverDB
-      .select()
-      .from(workContexts)
-      .where(eq(workContexts.workId, work!.id));
 
     expect(workRows).toHaveLength(0);
     expect(versionRows).toHaveLength(0);
-    expect(contextRows).toHaveLength(0);
     expect(await workModel.listByRootOperation({ rootOperationId: 'op-delete-task' })).toEqual([]);
     expect(await workModel.listByConversation({ threadId, topicId })).toEqual([]);
   });
@@ -1686,7 +1636,7 @@ describe('WorkModel', () => {
     expect(remainingOtherWorkRows).toHaveLength(1);
   });
 
-  it('preserves work and versions when the topic context is deleted', async () => {
+  it('preserves work and versions when the topic is deleted', async () => {
     const taskModel = new TaskModel(serverDB, userId);
     const workModel = new WorkModel(serverDB, userId);
     const task = await taskModel.create({ instruction: 'Topic scoped task' });
@@ -1706,14 +1656,10 @@ describe('WorkModel', () => {
       .select()
       .from(workVersions)
       .where(eq(workVersions.workId, work!.id));
-    const contextRows = await serverDB
-      .select()
-      .from(workContexts)
-      .where(eq(workContexts.workId, work!.id));
 
     expect(workRows).toHaveLength(1);
     expect(versionRows).toHaveLength(1);
-    expect(contextRows).toHaveLength(1);
-    expect(contextRows[0].topicId).toBeNull();
+    // topic FK on work_versions is ON DELETE SET NULL — the event row survives.
+    expect(versionRows[0].topicId).toBeNull();
   });
 });

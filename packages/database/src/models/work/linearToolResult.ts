@@ -318,7 +318,6 @@ const contextParams = (
   | 'source'
   | 'sourceMessageId'
   | 'sourceToolCallId'
-  | 'sourceType'
   | 'threadId'
   | 'topicId'
 > => ({
@@ -327,7 +326,6 @@ const contextParams = (
   source: params.toolName,
   sourceMessageId: params.sourceMessageId ?? null,
   sourceToolCallId: params.sourceToolCallId ?? null,
-  sourceType: 'tool',
   threadId: params.threadId ?? null,
   topicId: params.topicId ?? null,
 });

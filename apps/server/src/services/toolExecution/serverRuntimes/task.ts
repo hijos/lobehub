@@ -100,7 +100,6 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
     source: string;
     taskId?: string;
     taskIdentifier?: string;
-    title?: string | null;
   }) => {
     const model = workModel();
     if (!model) return;
@@ -114,11 +113,9 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
         source: params.source,
         sourceMessageId: toolMessageId,
         sourceToolCallId: toolCallId,
-        sourceType: 'tool',
         taskId: params.taskId,
         taskIdentifier: params.taskIdentifier,
         threadId,
-        title: params.title,
         topicId,
       });
     } catch (error) {
@@ -295,7 +292,6 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
               source: TaskApiName.createTasks,
               taskId: result.taskId,
               taskIdentifier: result.identifier,
-              title: item.name,
             });
           }
           results.push({
@@ -466,7 +462,6 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
         source: TaskApiName.editTask,
         taskId: task.id,
         taskIdentifier: task.identifier,
-        title: args.name,
       });
 
       return { content: formatTaskEdited(task.identifier, changes), success: true };

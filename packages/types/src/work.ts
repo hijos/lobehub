@@ -1,18 +1,16 @@
 import type { TaskAutomationMode, TaskStatus } from './task';
 
 export type WorkType = 'document' | 'github' | 'linear' | 'task';
-export type WorkStatus = 'archived' | 'draft' | 'published';
-export type WorkVisibility = 'private' | 'public' | 'workspace';
 export type LinearWorkResourceType = 'linear_document' | 'linear_issue';
 export type GithubWorkResourceType = 'github_issue' | 'github_pull_request';
 export type WorkResourceType =
   'document' | GithubWorkResourceType | LinearWorkResourceType | 'task';
-export type WorkRenderType =
-  'document_snapshot' | 'github_snapshot' | 'linear_snapshot' | 'task_snapshot';
-export type WorkContentRefType = 'file' | 'inline_snapshot' | 'storage' | 'url';
-export type WorkContextRole =
-  'created' | 'published' | 'referenced' | 'updated' | 'used_as_context';
-export type WorkSourceType = 'import' | 'system' | 'tool' | 'user';
+/**
+ * How a version changed the Work. Not derivable from `version === 1`: updating
+ * an external resource that was never registered before yields a v1 row with
+ * role='updated'.
+ */
+export type WorkVersionRole = 'created' | 'updated';
 
 export interface TaskWorkVersionSnapshot {
   assigneeAgentId: string | null;
@@ -58,7 +56,6 @@ export interface LinearWorkVersionSnapshot {
   createdAt: string | null;
   description: string | null;
   dueDate: string | null;
-  entityType: LinearWorkEntityType;
   icon: string | null;
   id: string;
   identifier: string | null;
@@ -83,7 +80,7 @@ export interface LinearWorkVersionSnapshot {
   url: string | null;
 }
 
-export type LinearWorkPatchField = keyof Omit<LinearWorkVersionSnapshot, 'entityType' | 'id'>;
+export type LinearWorkPatchField = keyof Omit<LinearWorkVersionSnapshot, 'id'>;
 
 export type GithubWorkEntityType = 'issue' | 'pull_request';
 
@@ -95,7 +92,6 @@ export interface GithubWorkVersionSnapshot {
   closedAt: string | null;
   createdAt: string | null;
   draft: boolean | null;
-  entityType: GithubWorkEntityType;
   headRef: string | null;
   id: string;
   labels: string[];
@@ -110,7 +106,7 @@ export interface GithubWorkVersionSnapshot {
   url: string | null;
 }
 
-export type GithubWorkPatchField = keyof Omit<GithubWorkVersionSnapshot, 'entityType' | 'id'>;
+export type GithubWorkPatchField = keyof Omit<GithubWorkVersionSnapshot, 'id'>;
 
 export type WorkVersionSnapshot =
   | {
@@ -126,12 +122,8 @@ export type WorkVersionSnapshot =
       task: TaskWorkVersionSnapshot;
     };
 
-export interface WorkContextMetadata {
-  agentDocumentId?: string;
-}
-
 export interface WorkVersionMetadata {
-  changeSummary?: string;
+  agentDocumentId?: string;
 }
 
 export interface WorkVersionCumulativeUsage {
@@ -147,54 +139,53 @@ export interface WorkItem {
   resourceId: string;
   resourceIdentifier: string | null;
   resourceType: WorkResourceType;
-  status: WorkStatus;
-  title: string;
   type: WorkType;
   updatedAt: Date;
   userId: string;
-  visibility: WorkVisibility;
   workspaceId: string | null;
 }
 
 export interface WorkVersionItem {
-  contentRef: string | null;
-  contentRefType: WorkContentRefType | null;
+  actorAgentId: string | null;
   createdAt: Date;
   cumulativeCost: number | null;
   cumulativeUsage: WorkVersionCumulativeUsage | null;
   id: string;
   metadata: WorkVersionMetadata | null;
-  renderType: WorkRenderType;
-  snapshot: WorkVersionSnapshot;
-  thumbnail: string | null;
-  title: string;
-  version: number;
-  workId: string;
-}
-
-export interface WorkContextItem {
-  actorAgentId: string | null;
-  createdAt: Date;
-  id: string;
-  metadata: WorkContextMetadata | null;
-  role: WorkContextRole;
+  role: WorkVersionRole;
   rootOperationId: string | null;
+  snapshot: WorkVersionSnapshot;
   source: string;
   sourceMessageId: string | null;
   sourceToolCallId: string | null;
-  sourceType: WorkSourceType;
   threadId: string | null;
   topicId: string | null;
   userId: string;
-  versionId: string | null;
+  version: number;
   workId: string;
   workspaceId: string | null;
 }
+
+/** Version fields embedded in Work list rows (the mutation event that surfaced the Work). */
+export type WorkVersionPreview = Pick<
+  WorkVersionItem,
+  | 'createdAt'
+  | 'cumulativeCost'
+  | 'id'
+  | 'metadata'
+  | 'role'
+  | 'rootOperationId'
+  | 'source'
+  | 'sourceMessageId'
+  | 'sourceToolCallId'
+  | 'version'
+>;
 
 export interface TaskWorkListItem extends WorkItem {
   resourceType: 'task';
   task: {
     description: string | null;
+    name: string | null;
     priority: number | null;
     status: TaskStatus | string | null;
   };
@@ -222,80 +213,56 @@ export interface GithubWorkListItem extends WorkItem {
 export type WorkListItem =
   DocumentWorkListItem | GithubWorkListItem | LinearWorkListItem | TaskWorkListItem;
 
-export type WorkContextPreview = Pick<
-  WorkContextItem,
-  | 'createdAt'
-  | 'id'
-  | 'metadata'
-  | 'role'
-  | 'rootOperationId'
-  | 'source'
-  | 'sourceMessageId'
-  | 'sourceToolCallId'
-  | 'sourceType'
->;
-
-export interface TaskWorkContextVersionItem extends TaskWorkListItem {
-  context: WorkContextPreview;
-  version: Pick<WorkVersionItem, 'createdAt' | 'cumulativeCost' | 'id' | 'title' | 'version'>;
+export interface TaskWorkVersionEventItem extends TaskWorkListItem {
+  version: WorkVersionPreview;
 }
 
-export interface DocumentWorkContextVersionItem extends DocumentWorkListItem {
-  context: WorkContextPreview;
-  version: Pick<WorkVersionItem, 'createdAt' | 'cumulativeCost' | 'id' | 'title' | 'version'>;
+export interface DocumentWorkVersionEventItem extends DocumentWorkListItem {
+  version: WorkVersionPreview;
 }
 
-export interface LinearWorkContextVersionItem extends LinearWorkListItem {
-  context: WorkContextPreview;
-  version: Pick<WorkVersionItem, 'createdAt' | 'cumulativeCost' | 'id' | 'title' | 'version'>;
+export interface LinearWorkVersionEventItem extends LinearWorkListItem {
+  version: WorkVersionPreview;
 }
 
-export interface GithubWorkContextVersionItem extends GithubWorkListItem {
-  context: WorkContextPreview;
-  version: Pick<WorkVersionItem, 'createdAt' | 'cumulativeCost' | 'id' | 'title' | 'version'>;
+export interface GithubWorkVersionEventItem extends GithubWorkListItem {
+  version: WorkVersionPreview;
 }
 
-export type WorkContextVersionItem =
-  | DocumentWorkContextVersionItem
-  | GithubWorkContextVersionItem
-  | LinearWorkContextVersionItem
-  | TaskWorkContextVersionItem;
-export type WorkContextVersionMap = Record<string, WorkContextVersionItem[]>;
+export type WorkVersionEventItem =
+  | DocumentWorkVersionEventItem
+  | GithubWorkVersionEventItem
+  | LinearWorkVersionEventItem
+  | TaskWorkVersionEventItem;
+export type WorkVersionEventMap = Record<string, WorkVersionEventItem[]>;
 
 export interface TaskWorkSummaryItem extends TaskWorkListItem {
-  context: WorkContextPreview;
+  event: WorkVersionPreview;
   totalCost: number | null;
-  version: Pick<WorkVersionItem, 'createdAt' | 'id' | 'title' | 'version'> | null;
+  version: Pick<WorkVersionItem, 'createdAt' | 'id' | 'version'> | null;
 }
 
 export interface DocumentWorkSummaryItem extends DocumentWorkListItem {
-  context: WorkContextPreview;
+  event: WorkVersionPreview;
   totalCost: number | null;
-  version: Pick<WorkVersionItem, 'createdAt' | 'id' | 'title' | 'version'> | null;
+  version: Pick<WorkVersionItem, 'createdAt' | 'id' | 'version'> | null;
 }
 
 export interface LinearWorkSummaryItem extends LinearWorkListItem {
-  context: WorkContextPreview;
+  event: WorkVersionPreview;
   totalCost: number | null;
-  version: Pick<WorkVersionItem, 'createdAt' | 'id' | 'title' | 'version'> | null;
+  version: Pick<WorkVersionItem, 'createdAt' | 'id' | 'version'> | null;
 }
 
 export interface GithubWorkSummaryItem extends GithubWorkListItem {
-  context: WorkContextPreview;
+  event: WorkVersionPreview;
   totalCost: number | null;
-  version: Pick<WorkVersionItem, 'createdAt' | 'id' | 'title' | 'version'> | null;
+  version: Pick<WorkVersionItem, 'createdAt' | 'id' | 'version'> | null;
 }
 
 export type WorkSummaryItem =
   DocumentWorkSummaryItem | GithubWorkSummaryItem | LinearWorkSummaryItem | TaskWorkSummaryItem;
 export type WorkSummaryMap = Record<string, WorkSummaryItem[]>;
-
-export interface WorkVersionListItem extends WorkVersionItem {
-  context?: Pick<
-    WorkContextItem,
-    'createdAt' | 'id' | 'metadata' | 'role' | 'source' | 'sourceType'
-  > | null;
-}
 
 export interface RegisterDocumentWorkParams {
   actorAgentId?: string | null;
@@ -303,14 +270,12 @@ export interface RegisterDocumentWorkParams {
   agentId?: string | null;
   description?: string | null;
   documentId: string;
-  role: Extract<WorkContextRole, 'created' | 'updated'>;
+  role: WorkVersionRole;
   rootOperationId?: string | null;
   source: string;
   sourceMessageId?: string | null;
   sourceToolCallId?: string | null;
-  sourceType?: WorkSourceType;
   threadId?: string | null;
-  title?: string | null;
   topicId?: string | null;
   url?: string | null;
 }
@@ -343,13 +308,12 @@ export interface RegisterLinearWorkParams {
   resourceId: string;
   resourceIdentifier?: string | null;
   resourceType: LinearWorkResourceType;
-  role: Extract<WorkContextRole, 'created' | 'updated'>;
+  role: WorkVersionRole;
   rootOperationId?: string | null;
   slugId?: string | null;
   source: string;
   sourceMessageId?: string | null;
   sourceToolCallId?: string | null;
-  sourceType?: WorkSourceType;
   status?: string | null;
   statusType?: string | null;
   targetId?: string | null;
@@ -383,12 +347,11 @@ export interface RegisterGithubWorkParams {
   resourceId: string;
   resourceIdentifier?: string | null;
   resourceType: GithubWorkResourceType;
-  role: Extract<WorkContextRole, 'created' | 'updated'>;
+  role: WorkVersionRole;
   rootOperationId?: string | null;
   source: string;
   sourceMessageId?: string | null;
   sourceToolCallId?: string | null;
-  sourceType?: WorkSourceType;
   state?: string | null;
   stateReason?: string | null;
   threadId?: string | null;
@@ -434,16 +397,14 @@ export type RegisterGithubToolResultWorkParams = Omit<
 
 export interface RegisterTaskWorkParams {
   actorAgentId?: string | null;
-  role: Extract<WorkContextRole, 'created' | 'updated'>;
+  role: WorkVersionRole;
   rootOperationId?: string | null;
   source: string;
   sourceMessageId?: string | null;
   sourceToolCallId?: string | null;
-  sourceType?: WorkSourceType;
   taskId?: string;
   taskIdentifier?: string;
   threadId?: string | null;
-  title?: string | null;
   topicId?: string | null;
 }
 

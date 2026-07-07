@@ -25,21 +25,18 @@ const workProcedure = wsCompatProcedure.use(serverDatabase).use(async (opts) => 
 
 const workProcedureWrite = workProcedure.use(withScopedPermission('agent:update'));
 
-const contextRoleSchema = z.enum(['created', 'updated']);
-const sourceTypeSchema = z.enum(['import', 'system', 'tool', 'user']);
+const versionRoleSchema = z.enum(['created', 'updated']);
 
 const registerTaskSchema = z.object({
   actorAgentId: z.string().nullable().optional(),
-  role: contextRoleSchema,
+  role: versionRoleSchema,
   rootOperationId: z.string().nullable().optional(),
   source: z.string().min(1),
   sourceMessageId: z.string().nullable().optional(),
   sourceToolCallId: z.string().nullable().optional(),
-  sourceType: sourceTypeSchema.optional(),
   taskId: z.string().optional(),
   taskIdentifier: z.string().optional(),
   threadId: z.string().nullable().optional(),
-  title: z.string().nullable().optional(),
   topicId: z.string().nullable().optional(),
 }) satisfies z.ZodType<RegisterTaskWorkParams>;
 

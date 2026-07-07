@@ -1,4 +1,4 @@
-import type { WorkSummaryItem, WorkVersionListItem } from '@lobechat/types';
+import type { WorkSummaryItem, WorkVersionItem } from '@lobechat/types';
 
 const PENDING_COST_REFRESH_WINDOW = 2 * 60 * 1000;
 const PENDING_COST_REFRESH_INTERVAL = 2000;
@@ -17,7 +17,7 @@ interface PendingCostItem {
 }
 
 type WorkSummaryCostRefreshItem = Pick<WorkSummaryItem, 'totalCost'> & {
-  context: Pick<WorkSummaryItem['context'], 'createdAt'>;
+  event: Pick<WorkSummaryItem['event'], 'createdAt'>;
 };
 
 const getPendingCostRefreshInterval = (items?: PendingCostItem[] | null, now = Date.now()) => {
@@ -40,13 +40,13 @@ export const getWorkSummaryCostRefreshInterval = (
   const items = Array.isArray(summaries) ? summaries : Object.values(summaries ?? {}).flat();
 
   return getPendingCostRefreshInterval(
-    items.map((item) => ({ cost: item.totalCost, createdAt: item.context.createdAt })),
+    items.map((item) => ({ cost: item.totalCost, createdAt: item.event.createdAt })),
     now,
   );
 };
 
 export const getWorkVersionCostRefreshInterval = (
-  versions?: Pick<WorkVersionListItem, 'createdAt' | 'cumulativeCost'>[] | null,
+  versions?: Pick<WorkVersionItem, 'createdAt' | 'cumulativeCost'>[] | null,
   now = Date.now(),
 ) => {
   return getPendingCostRefreshInterval(

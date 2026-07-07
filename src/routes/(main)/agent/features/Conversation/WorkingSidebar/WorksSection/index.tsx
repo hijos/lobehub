@@ -1,9 +1,4 @@
-import type {
-  TaskStatus,
-  WorkListItem,
-  WorkSummaryItem,
-  WorkVersionListItem,
-} from '@lobechat/types';
+import type { TaskStatus, WorkListItem, WorkSummaryItem, WorkVersionItem } from '@lobechat/types';
 import { Github } from '@lobehub/icons';
 import { ActionIcon, Center, Empty, Flexbox, Text } from '@lobehub/ui';
 import { createStaticStyles } from 'antd-style';
@@ -114,7 +109,7 @@ const VersionList = memo<{ workId: string }>(({ workId }) => {
     data = [],
     error,
     isLoading,
-  } = useClientDataSWR<WorkVersionListItem[]>(
+  } = useClientDataSWR<WorkVersionItem[]>(
     workKeys.versions(workId),
     () => workService.listVersions(workId),
     {
@@ -162,7 +157,7 @@ const VersionList = memo<{ workId: string }>(({ workId }) => {
                   v{version.version}
                 </Text>
                 <Text ellipsis className={styles.versionTitle}>
-                  {t(`workingPanel.works.role.${version.context?.role ?? 'updated'}` as never)}
+                  {t(`workingPanel.works.role.${version.role}` as never)}
                 </Text>
               </Flexbox>
               <Flexbox horizontal align={'center'} gap={8} style={{ flexShrink: 0 }}>
@@ -183,9 +178,6 @@ const VersionList = memo<{ workId: string }>(({ workId }) => {
                 )}
               </Flexbox>
             </Flexbox>
-            <Text ellipsis className={styles.context}>
-              {version.title}
-            </Text>
           </Flexbox>
         );
       })}
@@ -200,6 +192,18 @@ const WorkVersionHistoryCard = memo<{ work: WorkListItem }>(({ work }) => {
   const [openDocument, openTaskDetail] = useChatStore((s) => [s.openDocument, s.openTaskDetail]);
   const ToggleIcon = expanded ? ChevronDownIcon : ChevronRightIcon;
   const label = work.resourceIdentifier ?? work.resourceId;
+  // Display name comes straight from the resource snapshot (task name is live
+  // from the tasks join). No synthesized fallback: a nameless resource shows
+  // only its identifier label so data gaps stay visible.
+  const snapshotTitle =
+    work.type === 'task'
+      ? work.task.name
+      : work.type === 'document'
+        ? work.document.title
+        : work.type === 'linear'
+          ? work.linear.title
+          : work.github.title;
+  const title = snapshotTitle?.trim();
 
   const externalUrl =
     work.type === 'linear' ? work.linear.url : work.type === 'github' ? work.github.url : undefined;
@@ -239,19 +243,21 @@ const WorkVersionHistoryCard = memo<{ work: WorkListItem }>(({ work }) => {
         <Text className={styles.context} style={{ flexShrink: 0 }}>
           {label}
         </Text>
-        <Text
-          ellipsis
-          className={styles.title}
-          onClick={
-            handleTitleClick &&
-            ((event) => {
-              event.stopPropagation();
-              handleTitleClick();
-            })
-          }
-        >
-          {work.title}
-        </Text>
+        {title && (
+          <Text
+            ellipsis
+            className={styles.title}
+            onClick={
+              handleTitleClick &&
+              ((event) => {
+                event.stopPropagation();
+                handleTitleClick();
+              })
+            }
+          >
+            {title}
+          </Text>
+        )}
       </Flexbox>
       {expanded && <VersionList workId={work.id} />}
     </Flexbox>

@@ -67,10 +67,20 @@ const WorkSummaryCard = memo<WorkSummaryCardProps>(({ className, item }) => {
   const { t } = useTranslation('chat');
   const [openDocument, openTaskDetail] = useChatStore((s) => [s.openDocument, s.openTaskDetail]);
   const cost = formatWorkVersionCost(item.totalCost);
-  const title = item.version?.title || item.title;
   const isDocument = item.type === 'document';
   const isLinear = item.type === 'linear';
   const isGithub = item.type === 'github';
+  // Display name comes straight from the resource snapshot (task name is live
+  // from the tasks join). No synthesized fallback title: a nameless resource
+  // deliberately shows its bare identifier so data gaps stay visible.
+  const snapshotTitle = isDocument
+    ? item.document.title
+    : isLinear
+      ? item.linear.title
+      : isGithub
+        ? item.github.title
+        : item.task.name;
+  const title = snapshotTitle?.trim() || item.resourceIdentifier || item.resourceId;
   const description = isDocument
     ? item.document.description?.trim()
     : isLinear
@@ -91,7 +101,7 @@ const WorkSummaryCard = memo<WorkSummaryCardProps>(({ className, item }) => {
   const clickable = isDocument || (!isLinear && !isGithub) || !!externalUrl;
   const handleOpen = () => {
     if (isDocument) {
-      openDocument(item.document.id, item.context.metadata?.agentDocumentId);
+      openDocument(item.document.id, item.event.metadata?.agentDocumentId);
       return;
     }
 

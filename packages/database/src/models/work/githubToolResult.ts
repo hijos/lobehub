@@ -267,7 +267,6 @@ const buildParams = (
     source: params.toolName,
     sourceMessageId: params.sourceMessageId ?? null,
     sourceToolCallId: params.sourceToolCallId ?? null,
-    sourceType: 'tool',
     state: patch('state', hasOwn(record, 'state'), fromRecord(record, ['state'])),
     stateReason: patch(
       'stateReason',
@@ -651,7 +650,6 @@ const normalizeGithubCliResult = (
       source: params.toolName,
       sourceMessageId: params.sourceMessageId ?? null,
       sourceToolCallId: params.sourceToolCallId ?? null,
-      sourceType: 'tool',
       state: patch('state', parsed.action === 'create', 'open'),
       threadId: params.threadId ?? null,
       title: patch('title', parsed.title !== null, stringValue(parsed.title)),

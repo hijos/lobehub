@@ -75,7 +75,6 @@ export const createDocumentWorkRegistrar = (deps: {
     documentId?: string | null;
     role: 'created' | 'updated';
     source: string;
-    title?: string | null;
   }) => {
     if (!input.documentId) return;
 
@@ -91,9 +90,7 @@ export const createDocumentWorkRegistrar = (deps: {
         source: input.source,
         sourceMessageId: input.context.sourceMessageId,
         sourceToolCallId: input.context.sourceToolCallId,
-        sourceType: 'tool',
         threadId: input.context.threadId,
-        title: input.title,
         topicId: input.context.topicId,
         url: await buildRegisteredDocumentUrl(input.agentId, input.documentId),
       });

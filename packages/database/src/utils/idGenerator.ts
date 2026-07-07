@@ -37,7 +37,6 @@ const prefixes = {
   workspaceAuditLogs: 'wal',
   workspaceInvitations: 'wsi',
   workspaces: 'ws',
-  workContexts: 'wctx',
   workVersions: 'wver',
   works: 'work',
 } as const;

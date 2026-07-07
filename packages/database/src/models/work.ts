@@ -1,18 +1,18 @@
 import type {
   DeleteDocumentWorkParams,
-  DocumentWorkContextVersionItem,
   DocumentWorkListItem,
   DocumentWorkSummaryItem,
+  DocumentWorkVersionEventItem,
   DocumentWorkVersionSnapshot,
-  GithubWorkContextVersionItem,
   GithubWorkListItem,
   GithubWorkPatchField,
   GithubWorkSummaryItem,
+  GithubWorkVersionEventItem,
   GithubWorkVersionSnapshot,
-  LinearWorkContextVersionItem,
   LinearWorkListItem,
   LinearWorkPatchField,
   LinearWorkSummaryItem,
+  LinearWorkVersionEventItem,
   LinearWorkVersionSnapshot,
   RegisterDocumentWorkParams,
   RegisterGithubWorkParams,
@@ -20,29 +20,29 @@ import type {
   RegisterSkillToolResultWorkParams,
   RegisterTaskWorkParams,
   TaskItem,
-  TaskWorkContextVersionItem,
   TaskWorkListItem,
   TaskWorkSummaryItem,
+  TaskWorkVersionEventItem,
   TaskWorkVersionSnapshot,
   UpdateWorkVersionCumulativeUsageParams,
-  WorkContextPreview,
-  WorkContextVersionItem,
-  WorkContextVersionMap,
   WorkItem,
   WorkListItem,
   WorkSummaryItem,
   WorkSummaryMap,
+  WorkVersionEventItem,
+  WorkVersionEventMap,
   WorkVersionItem,
-  WorkVersionListItem,
+  WorkVersionPreview,
   WorkVersionSnapshot,
 } from '@lobechat/types';
 import type { SQL } from 'drizzle-orm';
 import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 
 import { agentDocuments } from '../schemas/agentDocuments';
 import { type DocumentItem, documents } from '../schemas/file';
 import { tasks } from '../schemas/task';
-import { workContexts, works, workVersions } from '../schemas/work';
+import { works, workVersions } from '../schemas/work';
 import type { LobeChatDatabase } from '../type';
 import { buildWorkspaceWhere } from '../utils/workspace';
 import { normalizeGithubToolResult } from './work/githubToolResult';
@@ -64,10 +64,16 @@ const WORK_TYPE_FANOUT = 4;
  * queries and the matching in-memory sort far beyond the final capped result.
  */
 const MAX_SUMMARY_ROW_LIMIT = 1000;
-const VERSION_CONTEXT_ROLES = ['created', 'updated'] as const;
 
-/** Context fields shared by all four Register*WorkParams shapes. */
-type WorkVersionContextParams = Pick<
+/**
+ * Second reference to `work_versions` for summary/list queries that both
+ * filter by the mutation event (topicId / rootOperationId on the event row)
+ * and render the Work's current content (works.currentVersionId join).
+ */
+const currentVersions = alias(workVersions, 'current_work_versions');
+
+/** Provenance fields shared by all four Register*WorkParams shapes. */
+type WorkVersionEventParams = Pick<
   RegisterTaskWorkParams,
   | 'actorAgentId'
   | 'role'
@@ -75,22 +81,34 @@ type WorkVersionContextParams = Pick<
   | 'source'
   | 'sourceMessageId'
   | 'sourceToolCallId'
-  | 'sourceType'
   | 'threadId'
   | 'topicId'
 >;
 
 /** Provider-specific inputs for one work-version insert attempt. */
 interface CreateVersionInput {
-  metadata?: (typeof workContexts.$inferInsert)['metadata'];
-  renderType: (typeof workVersions.$inferInsert)['renderType'];
+  metadata?: (typeof workVersions.$inferInsert)['metadata'];
   snapshot: WorkVersionSnapshot;
-  title: string;
 }
 
+/** Event-version columns embedded in list/summary rows (`WorkVersionPreview`). */
+const versionEventSelection = {
+  createdAt: workVersions.createdAt,
+  cumulativeCost: workVersions.cumulativeCost,
+  id: workVersions.id,
+  metadata: workVersions.metadata,
+  role: workVersions.role,
+  rootOperationId: workVersions.rootOperationId,
+  source: workVersions.source,
+  sourceMessageId: workVersions.sourceMessageId,
+  sourceToolCallId: workVersions.sourceToolCallId,
+  version: workVersions.version,
+};
+
 interface TaskWorkSummaryQueryRow {
-  context: typeof workContexts.$inferSelect;
+  event: WorkVersionPreview;
   taskDescription: TaskWorkListItem['task']['description'];
+  taskName: TaskWorkListItem['task']['name'];
   taskPriority: TaskWorkListItem['task']['priority'];
   taskStatus: TaskWorkListItem['task']['status'];
   version: TaskWorkSummaryItem['version'];
@@ -104,15 +122,17 @@ interface TaskWorkSummaryQueryRow {
 type SnapshotWorkType = 'document' | 'github' | 'linear';
 
 interface SnapshotWorkSummaryQueryRow<Snapshot> {
-  context: typeof workContexts.$inferSelect;
+  event: WorkVersionPreview;
   snapshot: Snapshot;
   version: DocumentWorkSummaryItem['version'];
   work: WorkItem;
 }
 
-/** Project the per-type snapshot object out of the version's snapshot JSON. */
-const snapshotField = <Snapshot>(type: SnapshotWorkType) =>
-  sql<Snapshot>`${workVersions.snapshot}->${sql.raw(`'${type}'`)}`;
+/** Project the per-type snapshot object out of a version row's snapshot JSON. */
+const snapshotField = <Snapshot>(
+  snapshotColumn: (typeof workVersions)['snapshot'] | (typeof currentVersions)['snapshot'],
+  type: SnapshotWorkType,
+) => sql<Snapshot>`${snapshotColumn}->${sql.raw(`'${type}'`)}`;
 
 const isUniqueViolation = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
@@ -164,6 +184,9 @@ export class WorkModel {
   private ownership = () =>
     buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, works);
 
+  private versionOwnership = () =>
+    buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, workVersions);
+
   private taskOwnership = () =>
     buildWorkspaceWhere(
       { userId: this.userId, workspaceId: this.workspaceId },
@@ -175,21 +198,6 @@ export class WorkModel {
 
   private agentDocumentOwnership = () =>
     buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, agentDocuments);
-
-  private contextOwnership = () =>
-    buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, workContexts);
-
-  private toWorkContext = (context: typeof workContexts.$inferSelect): WorkContextPreview => ({
-    createdAt: context.createdAt,
-    id: context.id,
-    metadata: context.metadata,
-    role: context.role,
-    rootOperationId: context.rootOperationId,
-    source: context.source,
-    sourceMessageId: context.sourceMessageId,
-    sourceToolCallId: context.sourceToolCallId,
-    sourceType: context.sourceType,
-  });
 
   private taskSnapshot = (task: TaskItem): WorkVersionSnapshot => ({
     task: {
@@ -222,7 +230,7 @@ export class WorkModel {
 
   private documentSnapshot = (
     doc: DocumentItem,
-    params: Pick<RegisterDocumentWorkParams, 'description' | 'title' | 'url'>,
+    params: Pick<RegisterDocumentWorkParams, 'description' | 'url'>,
   ): WorkVersionSnapshot => {
     const description =
       params.description?.trim() ||
@@ -233,7 +241,7 @@ export class WorkModel {
       document: {
         description,
         id: doc.id,
-        title: params.title?.trim() || doc.title,
+        title: doc.title,
         url: params.url ?? null,
       } satisfies DocumentWorkVersionSnapshot,
     };
@@ -258,7 +266,6 @@ export class WorkModel {
         createdAt: pick('createdAt', params.createdAt, null),
         description: pick('description', params.description, null),
         dueDate: pick('dueDate', params.dueDate, null),
-        entityType: params.resourceType === 'linear_issue' ? 'issue' : 'document',
         id: params.resourceId,
         icon: pick('icon', params.icon, null),
         identifier: pick('identifier', params.resourceIdentifier, null),
@@ -305,7 +312,6 @@ export class WorkModel {
         closedAt: pick('closedAt', params.closedAt, null),
         createdAt: pick('createdAt', params.createdAt, null),
         draft: pick('draft', params.draft, null),
-        entityType: params.resourceType === 'github_issue' ? 'issue' : 'pull_request',
         headRef: pick('headRef', params.headRef, null),
         id: params.resourceId,
         labels: pick('labels', params.labels, []),
@@ -381,27 +387,6 @@ export class WorkModel {
     return agentDocument ? doc : null;
   };
 
-  private taskTitle = (task: TaskItem, title?: string | null) =>
-    title?.trim() || task.name?.trim() || task.identifier;
-
-  private documentTitle = (doc: DocumentItem, title?: string | null) =>
-    title?.trim() || doc.title?.trim() || doc.filename?.trim() || doc.id;
-
-  private linearTitle = (params: RegisterLinearWorkParams, fallbackTitle?: string | null) =>
-    params.title?.trim() ||
-    fallbackTitle?.trim() ||
-    params.resourceIdentifier?.trim() ||
-    `${params.resourceType.replace('linear_', 'Linear ')} ${params.resourceId}`;
-
-  private githubTitle = (
-    params: Omit<RegisterGithubWorkParams, 'resourceId'> & { resourceId: string },
-    fallbackTitle?: string | null,
-  ) =>
-    params.title?.trim() ||
-    fallbackTitle?.trim() ||
-    params.resourceIdentifier?.trim() ||
-    `${params.resourceType === 'github_issue' ? 'GitHub issue' : 'GitHub pull request'} ${params.resourceId}`;
-
   /**
    * `works` has two partial unique indexes (workspace-scoped vs personal);
    * pick the ON CONFLICT target matching this model's scope.
@@ -417,12 +402,11 @@ export class WorkModel {
           targetWhere: isNull(works.workspaceId),
         };
 
-  private upsertTaskWork = async (task: TaskItem, title: string): Promise<WorkItem> => {
+  private upsertTaskWork = async (task: TaskItem): Promise<WorkItem> => {
     const values = {
       resourceId: task.id,
       resourceIdentifier: task.identifier,
       resourceType: 'task' as const,
-      title,
       type: 'task' as const,
       userId: this.userId,
       workspaceId: this.workspaceId ?? null,
@@ -437,7 +421,6 @@ export class WorkModel {
         ...conflict,
         set: {
           resourceIdentifier: task.identifier,
-          title,
           updatedAt: new Date(),
         },
       })
@@ -446,12 +429,11 @@ export class WorkModel {
     return work;
   };
 
-  private upsertDocumentWork = async (doc: DocumentItem, title: string): Promise<WorkItem> => {
+  private upsertDocumentWork = async (doc: DocumentItem): Promise<WorkItem> => {
     const values = {
       resourceId: doc.id,
       resourceIdentifier: doc.filename,
       resourceType: 'document' as const,
-      title,
       type: 'document' as const,
       userId: this.userId,
       workspaceId: this.workspaceId ?? null,
@@ -466,7 +448,6 @@ export class WorkModel {
         ...conflict,
         set: {
           resourceIdentifier: doc.filename,
-          title,
           updatedAt: new Date(),
         },
       })
@@ -476,13 +457,10 @@ export class WorkModel {
   };
 
   private upsertLinearWork = async (params: RegisterLinearWorkParams): Promise<WorkItem> => {
-    const insertTitle = this.linearTitle(params);
-    const updateTitle = params.patchFields?.includes('title') ? params.title?.trim() || null : null;
     const values = {
       resourceId: params.resourceId,
       resourceIdentifier: params.resourceIdentifier ?? null,
       resourceType: params.resourceType,
-      title: insertTitle,
       type: 'linear' as const,
       userId: this.userId,
       workspaceId: this.workspaceId ?? null,
@@ -497,7 +475,6 @@ export class WorkModel {
         ...conflict,
         set: {
           resourceIdentifier: sql`COALESCE(${params.resourceIdentifier ?? null}, ${works.resourceIdentifier})`,
-          title: sql`COALESCE(${updateTitle}, ${works.title})`,
           updatedAt: new Date(),
         },
       })
@@ -509,13 +486,10 @@ export class WorkModel {
   private upsertGithubWork = async (
     params: Omit<RegisterGithubWorkParams, 'resourceId'> & { resourceId: string },
   ): Promise<WorkItem> => {
-    const insertTitle = this.githubTitle(params);
-    const updateTitle = params.patchFields?.includes('title') ? params.title?.trim() || null : null;
     const values = {
       resourceId: params.resourceId,
       resourceIdentifier: params.resourceIdentifier ?? null,
       resourceType: params.resourceType,
-      title: insertTitle,
       type: 'github' as const,
       userId: this.userId,
       workspaceId: this.workspaceId ?? null,
@@ -530,7 +504,6 @@ export class WorkModel {
         ...conflict,
         set: {
           resourceIdentifier: sql`COALESCE(${params.resourceIdentifier ?? null}, ${works.resourceIdentifier})`,
-          title: sql`COALESCE(${updateTitle}, ${works.title})`,
           updatedAt: new Date(),
         },
       })
@@ -555,21 +528,19 @@ export class WorkModel {
   ): Promise<WorkVersionItem | null> => {
     if (!sourceToolCallId) return null;
 
-    const [row] = await this.db
-      .select({ version: workVersions })
-      .from(workContexts)
-      .innerJoin(workVersions, eq(workContexts.versionId, workVersions.id))
-      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
+    const [version] = await this.db
+      .select()
+      .from(workVersions)
       .where(
         and(
-          this.contextOwnership(),
-          eq(workContexts.workId, workId),
-          eq(workContexts.sourceToolCallId, sourceToolCallId),
+          this.versionOwnership(),
+          eq(workVersions.workId, workId),
+          eq(workVersions.sourceToolCallId, sourceToolCallId),
         ),
       )
       .limit(1);
 
-    return row?.version ?? null;
+    return version ?? null;
   };
 
   private findCurrentLinearSnapshot = async (
@@ -604,8 +575,9 @@ export class WorkModel {
 
   /**
    * Shared version-create pipeline: dedupe by sourceToolCallId, allocate the
-   * next version number in a transaction, insert the version + context rows,
-   * bump works.currentVersionId, and retry on unique-violation races.
+   * next version number in a transaction, insert the version row, bump
+   * works.currentVersionId, and retry on unique-violation races (either the
+   * `(workId, version)` or the `(workId, sourceToolCallId)` unique index).
    *
    * `buildInput` runs inside every retry attempt on purpose: a retry means a
    * concurrent registration for the same Work won the version race, so inputs
@@ -615,14 +587,14 @@ export class WorkModel {
    */
   private createVersion = async (
     work: WorkItem,
-    params: WorkVersionContextParams,
+    params: WorkVersionEventParams,
     buildInput: () => CreateVersionInput | Promise<CreateVersionInput>,
   ): Promise<WorkVersionItem> => {
     const existing = await this.findVersionBySourceToolCall(work.id, params.sourceToolCallId);
     if (existing) return existing;
 
     for (let attempt = 0; attempt < MAX_VERSION_CREATE_RETRIES; attempt += 1) {
-      const { metadata, renderType, snapshot, title } = await buildInput();
+      const { metadata, snapshot } = await buildInput();
 
       try {
         return await this.db.transaction(async (tx) => {
@@ -637,35 +609,26 @@ export class WorkModel {
           const [version] = await tx
             .insert(workVersions)
             .values({
-              contentRefType: 'inline_snapshot',
-              renderType,
+              actorAgentId: params.actorAgentId ?? null,
+              metadata: metadata ?? null,
+              role: params.role,
+              rootOperationId: params.rootOperationId ?? null,
               snapshot,
-              title,
+              source: params.source,
+              sourceMessageId: params.sourceMessageId ?? null,
+              sourceToolCallId: params.sourceToolCallId ?? null,
+              threadId: params.threadId ?? null,
+              topicId: params.topicId ?? null,
+              userId: this.userId,
               version: Number(next.version),
               workId: work.id,
+              workspaceId: this.workspaceId ?? null,
             })
             .returning();
 
-          await tx.insert(workContexts).values({
-            actorAgentId: params.actorAgentId ?? null,
-            metadata: metadata ?? null,
-            role: params.role,
-            rootOperationId: params.rootOperationId ?? null,
-            source: params.source,
-            sourceMessageId: params.sourceMessageId ?? null,
-            sourceToolCallId: params.sourceToolCallId ?? null,
-            sourceType: params.sourceType ?? 'tool',
-            threadId: params.threadId ?? null,
-            topicId: params.topicId ?? null,
-            userId: this.userId,
-            versionId: version.id,
-            workId: work.id,
-            workspaceId: this.workspaceId ?? null,
-          });
-
           await tx
             .update(works)
-            .set({ currentVersionId: version.id, title, updatedAt: now })
+            .set({ currentVersionId: version.id, updatedAt: now })
             .where(and(eq(works.id, work.id), this.ownership()));
 
           return version;
@@ -690,9 +653,7 @@ export class WorkModel {
     params: RegisterTaskWorkParams,
   ): Promise<WorkVersionItem> =>
     this.createVersion(work, params, () => ({
-      renderType: 'task_snapshot',
       snapshot: this.taskSnapshot(task),
-      title: this.taskTitle(task, params.title),
     }));
 
   private createDocumentVersion = async (
@@ -702,9 +663,7 @@ export class WorkModel {
   ): Promise<WorkVersionItem> =>
     this.createVersion(work, params, () => ({
       metadata: params.agentDocumentId ? { agentDocumentId: params.agentDocumentId } : null,
-      renderType: 'document_snapshot',
       snapshot: this.documentSnapshot(doc, params),
-      title: this.documentTitle(doc, params.title),
     }));
 
   private createLinearVersion = async (
@@ -716,13 +675,7 @@ export class WorkModel {
       // be the race winner's committed snapshot, not the pre-race one.
       const previousSnapshot = await this.findCurrentLinearSnapshot(work.id);
       // Linear update responses can be partial, e.g. { id, state }; keep prior labels/team.
-      const snapshot = this.linearSnapshot(params, previousSnapshot);
-
-      return {
-        renderType: 'linear_snapshot',
-        snapshot,
-        title: snapshot.linear.title?.trim() || work.title,
-      };
+      return { snapshot: this.linearSnapshot(params, previousSnapshot) };
     });
 
   private createGithubVersion = async (
@@ -733,21 +686,14 @@ export class WorkModel {
       // Re-read on every attempt (see createVersion): the patch-merge base must
       // be the race winner's committed snapshot, not the pre-race one.
       const previousSnapshot = await this.findCurrentGithubSnapshot(work.id);
-      const snapshot = this.githubSnapshot(params, previousSnapshot);
-
-      return {
-        renderType: 'github_snapshot',
-        snapshot,
-        title: snapshot.github.title?.trim() || work.title,
-      };
+      return { snapshot: this.githubSnapshot(params, previousSnapshot) };
     });
 
   registerTask = async (params: RegisterTaskWorkParams): Promise<WorkItem | null> => {
     const task = await this.resolveTask(params);
     if (!task) return null;
 
-    const title = this.taskTitle(task, params.title);
-    const work = await this.upsertTaskWork(task, title);
+    const work = await this.upsertTaskWork(task);
     await this.createTaskVersion(work, task, params);
 
     return this.findById(work.id);
@@ -757,8 +703,7 @@ export class WorkModel {
     const doc = await this.resolveDocument(params);
     if (!doc) return null;
 
-    const title = this.documentTitle(doc, params.title);
-    const work = await this.upsertDocumentWork(doc, title);
+    const work = await this.upsertDocumentWork(doc);
     await this.createDocumentVersion(work, doc, params);
 
     return this.findById(work.id);
@@ -829,16 +774,16 @@ export class WorkModel {
     if (!params.sourceMessageId || !params.sourceToolCallId) return;
 
     const filters = [
-      this.contextOwnership(),
-      eq(workContexts.sourceToolCallId, params.sourceToolCallId),
-      isNull(workContexts.sourceMessageId),
+      this.versionOwnership(),
+      eq(workVersions.sourceToolCallId, params.sourceToolCallId),
+      isNull(workVersions.sourceMessageId),
     ];
     if (params.rootOperationId) {
-      filters.push(eq(workContexts.rootOperationId, params.rootOperationId));
+      filters.push(eq(workVersions.rootOperationId, params.rootOperationId));
     }
 
     await this.db
-      .update(workContexts)
+      .update(workVersions)
       .set({ sourceMessageId: params.sourceMessageId })
       .where(and(...filters));
   };
@@ -851,69 +796,47 @@ export class WorkModel {
     if (params.cumulativeUsage !== undefined) updates.cumulativeUsage = params.cumulativeUsage;
     if (Object.keys(updates).length === 0) return;
 
-    const rows = await this.db
-      .select({ versionId: workContexts.versionId })
-      .from(workContexts)
+    await this.db
+      .update(workVersions)
+      .set(updates)
       .where(
         and(
-          this.contextOwnership(),
-          eq(workContexts.rootOperationId, params.rootOperationId),
-          eq(workContexts.sourceToolCallId, params.sourceToolCallId),
-          isNotNull(workContexts.versionId),
+          this.versionOwnership(),
+          eq(workVersions.rootOperationId, params.rootOperationId),
+          eq(workVersions.sourceToolCallId, params.sourceToolCallId),
         ),
       );
-
-    const versionIds = rows
-      .map((row) => row.versionId)
-      .filter((versionId): versionId is string => !!versionId);
-    if (versionIds.length === 0) return;
-
-    await this.db.update(workVersions).set(updates).where(inArray(workVersions.id, versionIds));
   };
 
-  private listTaskContextVersions = async (
+  private listTaskVersionEvents = async (
     filters: SQL[],
     limit = 20,
-  ): Promise<TaskWorkContextVersionItem[]> => {
+  ): Promise<TaskWorkVersionEventItem[]> => {
     const rows = await this.db
       .select({
-        context: workContexts,
         taskDescription: sql<string | null>`${workVersions.snapshot}->'task'->>'description'`,
+        taskName: tasks.name,
         taskPriority: tasks.priority,
         taskStatus: tasks.status,
-        version: {
-          createdAt: workVersions.createdAt,
-          cumulativeCost: workVersions.cumulativeCost,
-          id: workVersions.id,
-          title: workVersions.title,
-          version: workVersions.version,
-        },
+        version: versionEventSelection,
         work: works,
       })
-      .from(workContexts)
-      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
-      .innerJoin(workVersions, eq(workContexts.versionId, workVersions.id))
+      .from(workVersions)
+      .innerJoin(works, and(eq(workVersions.workId, works.id), this.ownership()))
       .innerJoin(
         tasks,
         and(eq(works.resourceType, 'task'), eq(works.resourceId, tasks.id), this.taskOwnership()),
       )
-      .where(
-        and(
-          this.contextOwnership(),
-          ...filters,
-          inArray(workContexts.role, VERSION_CONTEXT_ROLES),
-          eq(works.type, 'task'),
-        ),
-      )
-      .orderBy(desc(workContexts.createdAt))
+      .where(and(this.versionOwnership(), ...filters, eq(works.type, 'task')))
+      .orderBy(desc(workVersions.createdAt))
       .limit(limit);
 
     return rows.map((row) => ({
       ...row.work,
-      context: this.toWorkContext(row.context),
       resourceType: 'task' as const,
       task: {
         description: row.taskDescription,
+        name: row.taskName,
         priority: row.taskPriority,
         status: row.taskStatus,
       },
@@ -923,46 +846,31 @@ export class WorkModel {
   };
 
   /**
-   * Shared context-version query for snapshot-backed work types; `task` keeps
+   * Shared version-event query for snapshot-backed work types; `task` keeps
    * its own variant because it additionally joins the tasks table.
    */
-  private listSnapshotContextVersionRows = <Snapshot>(
+  private listSnapshotVersionEventRows = <Snapshot>(
     type: SnapshotWorkType,
     filters: SQL[],
     limit: number,
   ) =>
     this.db
       .select({
-        context: workContexts,
-        snapshot: snapshotField<Snapshot>(type),
-        version: {
-          createdAt: workVersions.createdAt,
-          cumulativeCost: workVersions.cumulativeCost,
-          id: workVersions.id,
-          title: workVersions.title,
-          version: workVersions.version,
-        },
+        snapshot: snapshotField<Snapshot>(workVersions.snapshot, type),
+        version: versionEventSelection,
         work: works,
       })
-      .from(workContexts)
-      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
-      .innerJoin(workVersions, eq(workContexts.versionId, workVersions.id))
-      .where(
-        and(
-          this.contextOwnership(),
-          ...filters,
-          inArray(workContexts.role, VERSION_CONTEXT_ROLES),
-          eq(works.type, type),
-        ),
-      )
-      .orderBy(desc(workContexts.createdAt))
+      .from(workVersions)
+      .innerJoin(works, and(eq(workVersions.workId, works.id), this.ownership()))
+      .where(and(this.versionOwnership(), ...filters, eq(works.type, type)))
+      .orderBy(desc(workVersions.createdAt))
       .limit(limit);
 
-  private listDocumentContextVersions = async (
+  private listDocumentVersionEvents = async (
     filters: SQL[],
     limit = 20,
-  ): Promise<DocumentWorkContextVersionItem[]> => {
-    const rows = await this.listSnapshotContextVersionRows<DocumentWorkVersionSnapshot>(
+  ): Promise<DocumentWorkVersionEventItem[]> => {
+    const rows = await this.listSnapshotVersionEventRows<DocumentWorkVersionSnapshot>(
       'document',
       filters,
       limit,
@@ -970,7 +878,6 @@ export class WorkModel {
 
     return rows.map((row) => ({
       ...row.work,
-      context: this.toWorkContext(row.context),
       document: row.snapshot,
       resourceType: 'document' as const,
       type: 'document' as const,
@@ -978,11 +885,11 @@ export class WorkModel {
     }));
   };
 
-  private listLinearContextVersions = async (
+  private listLinearVersionEvents = async (
     filters: SQL[],
     limit = 20,
-  ): Promise<LinearWorkContextVersionItem[]> => {
-    const rows = await this.listSnapshotContextVersionRows<LinearWorkVersionSnapshot>(
+  ): Promise<LinearWorkVersionEventItem[]> => {
+    const rows = await this.listSnapshotVersionEventRows<LinearWorkVersionSnapshot>(
       'linear',
       filters,
       limit,
@@ -990,7 +897,6 @@ export class WorkModel {
 
     return rows.map((row) => ({
       ...row.work,
-      context: this.toWorkContext(row.context),
       linear: row.snapshot,
       resourceType: row.work.resourceType as LinearWorkListItem['resourceType'],
       type: 'linear' as const,
@@ -998,11 +904,11 @@ export class WorkModel {
     }));
   };
 
-  private listGithubContextVersions = async (
+  private listGithubVersionEvents = async (
     filters: SQL[],
     limit = 20,
-  ): Promise<GithubWorkContextVersionItem[]> => {
-    const rows = await this.listSnapshotContextVersionRows<GithubWorkVersionSnapshot>(
+  ): Promise<GithubWorkVersionEventItem[]> => {
+    const rows = await this.listSnapshotVersionEventRows<GithubWorkVersionSnapshot>(
       'github',
       filters,
       limit,
@@ -1010,7 +916,6 @@ export class WorkModel {
 
     return rows.map((row) => ({
       ...row.work,
-      context: this.toWorkContext(row.context),
       github: row.snapshot,
       resourceType: row.work.resourceType as GithubWorkListItem['resourceType'],
       type: 'github' as const,
@@ -1021,7 +926,7 @@ export class WorkModel {
   listByRootOperation = async (params: {
     limit?: number;
     rootOperationId?: string | null;
-  }): Promise<WorkContextVersionItem[]> => {
+  }): Promise<WorkVersionEventItem[]> => {
     if (!params.rootOperationId) return [];
 
     const map = await this.listByRootOperations({
@@ -1035,35 +940,35 @@ export class WorkModel {
   listByRootOperations = async (params: {
     limit?: number;
     rootOperationIds?: string[] | null;
-  }): Promise<WorkContextVersionMap> => {
+  }): Promise<WorkVersionEventMap> => {
     const rootOperationIds = Array.from(
       new Set((params.rootOperationIds ?? []).filter((id): id is string => !!id)),
     ).sort();
     if (rootOperationIds.length === 0) return {};
 
     const limit = params.limit ?? 20;
-    const result: WorkContextVersionMap = Object.fromEntries(
+    const result: WorkVersionEventMap = Object.fromEntries(
       rootOperationIds.map((rootOperationId) => [rootOperationId, []]),
     );
     // One batched query per work type across all ids (instead of 4 queries per
     // id); rows are re-partitioned per rootOperationId below. Each per-type
     // query over-fetches up to `limit` rows per id, clamped like the sibling
     // listSummariesByRootOperations.
-    const filters = [inArray(workContexts.rootOperationId, rootOperationIds)];
+    const filters = [inArray(workVersions.rootOperationId, rootOperationIds)];
     const rowLimit = Math.min(rootOperationIds.length * limit, MAX_SUMMARY_ROW_LIMIT);
     const [taskItems, documentItems, linearItems, githubItems] = await Promise.all([
-      this.listTaskContextVersions(filters, rowLimit),
-      this.listDocumentContextVersions(filters, rowLimit),
-      this.listLinearContextVersions(filters, rowLimit),
-      this.listGithubContextVersions(filters, rowLimit),
+      this.listTaskVersionEvents(filters, rowLimit),
+      this.listDocumentVersionEvents(filters, rowLimit),
+      this.listLinearVersionEvents(filters, rowLimit),
+      this.listGithubVersionEvents(filters, rowLimit),
     ]);
 
     const items = [...taskItems, ...documentItems, ...linearItems, ...githubItems].sort(
-      (a, b) => b.context.createdAt.getTime() - a.context.createdAt.getTime(),
+      (a, b) => b.version.createdAt.getTime() - a.version.createdAt.getTime(),
     );
 
     for (const item of items) {
-      const rootOperationId = item.context.rootOperationId;
+      const rootOperationId = item.version.rootOperationId;
       if (!rootOperationId || !(rootOperationId in result)) continue;
       if (result[rootOperationId].length >= limit) continue;
       result[rootOperationId].push(item);
@@ -1088,26 +993,15 @@ export class WorkModel {
     const rows = await this.db
       .select({
         cumulativeCost: workVersions.cumulativeCost,
-        rootOperationId: workContexts.rootOperationId,
+        rootOperationId: workVersions.rootOperationId,
         versionId: workVersions.id,
         workId: workVersions.workId,
       })
       .from(workVersions)
-      .leftJoin(
-        workContexts,
-        and(
-          eq(workContexts.versionId, workVersions.id),
-          inArray(workContexts.role, VERSION_CONTEXT_ROLES),
-        ),
-      )
       .where(inArray(workVersions.workId, ids));
 
     const maxCostByOperation = new Map<string, Map<string, number>>();
-    const seenVersionIds = new Set<string>();
     for (const row of rows) {
-      // A version can join multiple context rows; count its cost once.
-      if (seenVersionIds.has(row.versionId)) continue;
-      seenVersionIds.add(row.versionId);
       if (row.cumulativeCost === null) continue;
 
       const operationKey = row.rootOperationId ?? row.versionId;
@@ -1131,34 +1025,27 @@ export class WorkModel {
   ): Promise<TaskWorkSummaryQueryRow[]> =>
     this.db
       .select({
-        context: workContexts,
-        taskDescription: sql<string | null>`${workVersions.snapshot}->'task'->>'description'`,
+        event: versionEventSelection,
+        taskDescription: sql<string | null>`${currentVersions.snapshot}->'task'->>'description'`,
+        taskName: tasks.name,
         taskPriority: tasks.priority,
         taskStatus: tasks.status,
         version: {
-          createdAt: workVersions.createdAt,
-          id: workVersions.id,
-          title: workVersions.title,
-          version: workVersions.version,
+          createdAt: currentVersions.createdAt,
+          id: currentVersions.id,
+          version: currentVersions.version,
         },
         work: works,
       })
-      .from(workContexts)
-      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
-      .innerJoin(workVersions, eq(works.currentVersionId, workVersions.id))
+      .from(workVersions)
+      .innerJoin(works, and(eq(workVersions.workId, works.id), this.ownership()))
+      .innerJoin(currentVersions, eq(works.currentVersionId, currentVersions.id))
       .innerJoin(
         tasks,
         and(eq(works.resourceType, 'task'), eq(works.resourceId, tasks.id), this.taskOwnership()),
       )
-      .where(
-        and(
-          this.contextOwnership(),
-          ...filters,
-          inArray(workContexts.role, VERSION_CONTEXT_ROLES),
-          eq(works.type, 'task'),
-        ),
-      )
-      .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
+      .where(and(this.versionOwnership(), ...filters, eq(works.type, 'task')))
+      .orderBy(desc(workVersions.createdAt), desc(works.updatedAt))
       .limit(rowLimit);
 
   private toTaskWorkSummaries = async (
@@ -1168,10 +1055,11 @@ export class WorkModel {
 
     return rows.map((row) => ({
       ...row.work,
-      context: this.toWorkContext(row.context),
+      event: row.event,
       resourceType: 'task' as const,
       task: {
         description: row.taskDescription,
+        name: row.taskName,
         priority: row.taskPriority,
         status: row.taskStatus,
       },
@@ -1192,28 +1080,20 @@ export class WorkModel {
   ): Promise<SnapshotWorkSummaryQueryRow<Snapshot>[]> =>
     this.db
       .select({
-        context: workContexts,
-        snapshot: snapshotField<Snapshot>(type),
+        event: versionEventSelection,
+        snapshot: snapshotField<Snapshot>(currentVersions.snapshot, type),
         version: {
-          createdAt: workVersions.createdAt,
-          id: workVersions.id,
-          title: workVersions.title,
-          version: workVersions.version,
+          createdAt: currentVersions.createdAt,
+          id: currentVersions.id,
+          version: currentVersions.version,
         },
         work: works,
       })
-      .from(workContexts)
-      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
-      .innerJoin(workVersions, eq(works.currentVersionId, workVersions.id))
-      .where(
-        and(
-          this.contextOwnership(),
-          ...filters,
-          inArray(workContexts.role, VERSION_CONTEXT_ROLES),
-          eq(works.type, type),
-        ),
-      )
-      .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
+      .from(workVersions)
+      .innerJoin(works, and(eq(workVersions.workId, works.id), this.ownership()))
+      .innerJoin(currentVersions, eq(works.currentVersionId, currentVersions.id))
+      .where(and(this.versionOwnership(), ...filters, eq(works.type, type)))
+      .orderBy(desc(workVersions.createdAt), desc(works.updatedAt))
       .limit(rowLimit);
 
   private listDocumentWorkSummaryRows = (filters: SQL[], rowLimit: number) =>
@@ -1232,8 +1112,8 @@ export class WorkModel {
 
     return rows.map((row) => ({
       ...row.work,
-      context: this.toWorkContext(row.context),
       document: row.snapshot,
+      event: row.event,
       resourceType: 'document' as const,
       totalCost: costByWorkId.get(row.work.id) ?? null,
       type: 'document' as const,
@@ -1248,7 +1128,7 @@ export class WorkModel {
 
     return rows.map((row) => ({
       ...row.work,
-      context: this.toWorkContext(row.context),
+      event: row.event,
       linear: row.snapshot,
       resourceType: row.work.resourceType as LinearWorkSummaryItem['resourceType'],
       totalCost: costByWorkId.get(row.work.id) ?? null,
@@ -1264,7 +1144,7 @@ export class WorkModel {
 
     return rows.map((row) => ({
       ...row.work,
-      context: this.toWorkContext(row.context),
+      event: row.event,
       github: row.snapshot,
       resourceType: row.work.resourceType as GithubWorkSummaryItem['resourceType'],
       totalCost: costByWorkId.get(row.work.id) ?? null,
@@ -1300,7 +1180,7 @@ export class WorkModel {
     if (rootOperationIds.length === 0) return result;
 
     const limit = params.limit ?? 20;
-    const filters = [inArray(workContexts.rootOperationId, rootOperationIds)];
+    const filters = [inArray(workVersions.rootOperationId, rootOperationIds)];
     const rowLimit = Math.min(
       rootOperationIds.length * limit * WORK_TYPE_FANOUT,
       MAX_SUMMARY_ROW_LIMIT,
@@ -1317,11 +1197,11 @@ export class WorkModel {
         ...(await this.toDocumentWorkSummaries(documentRows)),
         ...(await this.toLinearWorkSummaries(linearRows)),
         ...(await this.toGithubWorkSummaries(githubRows)),
-      ].sort((a, b) => b.context.createdAt.getTime() - a.context.createdAt.getTime()),
+      ].sort((a, b) => b.event.createdAt.getTime() - a.event.createdAt.getTime()),
     );
 
     for (const summary of summaries) {
-      const rootOperationId = summary.context.rootOperationId;
+      const rootOperationId = summary.event.rootOperationId;
       if (!rootOperationId || !(rootOperationId in result)) continue;
       if (result[rootOperationId].length >= limit) continue;
       result[rootOperationId].push(summary);
@@ -1339,9 +1219,9 @@ export class WorkModel {
 
     const limit = params.limit ?? 50;
     const threadFilter = params.threadId
-      ? eq(workContexts.threadId, params.threadId)
-      : isNull(workContexts.threadId);
-    const filters = [eq(workContexts.topicId, params.topicId), threadFilter];
+      ? eq(workVersions.threadId, params.threadId)
+      : isNull(workVersions.threadId);
+    const filters = [eq(workVersions.topicId, params.topicId), threadFilter];
     const [taskRows, documentRows, linearRows, githubRows] = await Promise.all([
       this.listTaskWorkSummaryRows(filters, limit * WORK_TYPE_FANOUT),
       this.listDocumentWorkSummaryRows(filters, limit * WORK_TYPE_FANOUT),
@@ -1355,7 +1235,7 @@ export class WorkModel {
         ...(await this.toDocumentWorkSummaries(documentRows)),
         ...(await this.toLinearWorkSummaries(linearRows)),
         ...(await this.toGithubWorkSummaries(githubRows)),
-      ].sort((a, b) => b.context.createdAt.getTime() - a.context.createdAt.getTime()),
+      ].sort((a, b) => b.event.createdAt.getTime() - a.event.createdAt.getTime()),
       limit,
     );
   };
@@ -1369,104 +1249,73 @@ export class WorkModel {
 
     const limit = params.limit ?? 50;
     const threadFilter = params.threadId
-      ? eq(workContexts.threadId, params.threadId)
-      : isNull(workContexts.threadId);
+      ? eq(workVersions.threadId, params.threadId)
+      : isNull(workVersions.threadId);
 
     const taskRows = await this.db
       .select({
-        contextCreatedAt: workContexts.createdAt,
+        eventCreatedAt: workVersions.createdAt,
         taskDescription: tasks.description,
+        taskName: tasks.name,
         taskPriority: tasks.priority,
         taskStatus: tasks.status,
         work: works,
       })
-      .from(workContexts)
-      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
+      .from(workVersions)
+      .innerJoin(works, and(eq(workVersions.workId, works.id), this.ownership()))
       .innerJoin(
         tasks,
         and(eq(works.resourceType, 'task'), eq(works.resourceId, tasks.id), this.taskOwnership()),
       )
       .where(
         and(
-          this.contextOwnership(),
-          eq(workContexts.topicId, params.topicId),
+          this.versionOwnership(),
+          eq(workVersions.topicId, params.topicId),
           threadFilter,
           eq(works.type, 'task'),
         ),
       )
-      .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
+      .orderBy(desc(workVersions.createdAt), desc(works.updatedAt))
       .limit(limit * WORK_TYPE_FANOUT);
 
-    const documentRows = await this.db
-      .select({
-        contextCreatedAt: workContexts.createdAt,
-        document: sql<DocumentWorkVersionSnapshot>`${workVersions.snapshot}->'document'`,
-        work: works,
-      })
-      .from(workContexts)
-      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
-      .innerJoin(workVersions, eq(works.currentVersionId, workVersions.id))
-      .where(
-        and(
-          this.contextOwnership(),
-          eq(workContexts.topicId, params.topicId),
-          threadFilter,
-          eq(works.type, 'document'),
-        ),
-      )
-      .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
-      .limit(limit * WORK_TYPE_FANOUT);
+    const snapshotRows = <Snapshot>(type: SnapshotWorkType) =>
+      this.db
+        .select({
+          eventCreatedAt: workVersions.createdAt,
+          snapshot: snapshotField<Snapshot>(currentVersions.snapshot, type),
+          work: works,
+        })
+        .from(workVersions)
+        .innerJoin(works, and(eq(workVersions.workId, works.id), this.ownership()))
+        .innerJoin(currentVersions, eq(works.currentVersionId, currentVersions.id))
+        .where(
+          and(
+            this.versionOwnership(),
+            eq(workVersions.topicId, params.topicId!),
+            threadFilter,
+            eq(works.type, type),
+          ),
+        )
+        .orderBy(desc(workVersions.createdAt), desc(works.updatedAt))
+        .limit(limit * WORK_TYPE_FANOUT);
 
-    const linearRows = await this.db
-      .select({
-        contextCreatedAt: workContexts.createdAt,
-        linear: sql<LinearWorkVersionSnapshot>`${workVersions.snapshot}->'linear'`,
-        work: works,
-      })
-      .from(workContexts)
-      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
-      .innerJoin(workVersions, eq(works.currentVersionId, workVersions.id))
-      .where(
-        and(
-          this.contextOwnership(),
-          eq(workContexts.topicId, params.topicId),
-          threadFilter,
-          eq(works.type, 'linear'),
-        ),
-      )
-      .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
-      .limit(limit * WORK_TYPE_FANOUT);
-
-    const githubRows = await this.db
-      .select({
-        contextCreatedAt: workContexts.createdAt,
-        github: sql<GithubWorkVersionSnapshot>`${workVersions.snapshot}->'github'`,
-        work: works,
-      })
-      .from(workContexts)
-      .innerJoin(works, and(eq(workContexts.workId, works.id), this.ownership()))
-      .innerJoin(workVersions, eq(works.currentVersionId, workVersions.id))
-      .where(
-        and(
-          this.contextOwnership(),
-          eq(workContexts.topicId, params.topicId),
-          threadFilter,
-          eq(works.type, 'github'),
-        ),
-      )
-      .orderBy(desc(workContexts.createdAt), desc(works.updatedAt))
-      .limit(limit * WORK_TYPE_FANOUT);
+    const [documentRows, linearRows, githubRows] = await Promise.all([
+      snapshotRows<DocumentWorkVersionSnapshot>('document'),
+      snapshotRows<LinearWorkVersionSnapshot>('linear'),
+      snapshotRows<GithubWorkVersionSnapshot>('github'),
+    ]);
 
     const seen = new Set<string>();
     const items: WorkListItem[] = [];
     const rows = [
       ...taskRows.map((row) => ({
-        contextCreatedAt: row.contextCreatedAt,
+        eventCreatedAt: row.eventCreatedAt,
         item: {
           ...row.work,
           resourceType: 'task' as const,
           task: {
             description: row.taskDescription,
+            name: row.taskName,
             priority: row.taskPriority,
             status: row.taskStatus,
           },
@@ -1474,33 +1323,33 @@ export class WorkModel {
         } satisfies TaskWorkListItem,
       })),
       ...documentRows.map((row) => ({
-        contextCreatedAt: row.contextCreatedAt,
+        eventCreatedAt: row.eventCreatedAt,
         item: {
           ...row.work,
-          document: row.document,
+          document: row.snapshot,
           resourceType: 'document' as const,
           type: 'document' as const,
         } satisfies DocumentWorkListItem,
       })),
       ...linearRows.map((row) => ({
-        contextCreatedAt: row.contextCreatedAt,
+        eventCreatedAt: row.eventCreatedAt,
         item: {
           ...row.work,
-          linear: row.linear,
+          linear: row.snapshot,
           resourceType: row.work.resourceType as LinearWorkListItem['resourceType'],
           type: 'linear' as const,
         } satisfies LinearWorkListItem,
       })),
       ...githubRows.map((row) => ({
-        contextCreatedAt: row.contextCreatedAt,
+        eventCreatedAt: row.eventCreatedAt,
         item: {
           ...row.work,
-          github: row.github,
+          github: row.snapshot,
           resourceType: row.work.resourceType as GithubWorkListItem['resourceType'],
           type: 'github' as const,
         } satisfies GithubWorkListItem,
       })),
-    ].sort((a, b) => b.contextCreatedAt.getTime() - a.contextCreatedAt.getTime());
+    ].sort((a, b) => b.eventCreatedAt.getTime() - a.eventCreatedAt.getTime());
 
     for (const row of rows) {
       if (seen.has(row.item.id)) continue;
@@ -1512,7 +1361,7 @@ export class WorkModel {
     return items;
   };
 
-  listVersions = async (workId: string): Promise<WorkVersionListItem[]> => {
+  listVersions = async (workId: string): Promise<WorkVersionItem[]> => {
     const rows = await this.db
       .select({ version: workVersions })
       .from(workVersions)
@@ -1520,43 +1369,6 @@ export class WorkModel {
       .where(eq(workVersions.workId, workId))
       .orderBy(desc(workVersions.version));
 
-    const versions = rows.map((row) => row.version);
-    const versionIds = versions.map((version) => version.id);
-    if (versionIds.length === 0) return [];
-
-    const contextRows = await this.db
-      .select({ context: workContexts })
-      .from(workContexts)
-      .where(
-        and(
-          this.contextOwnership(),
-          inArray(workContexts.versionId, versionIds),
-          inArray(workContexts.role, VERSION_CONTEXT_ROLES),
-        ),
-      )
-      .orderBy(desc(workContexts.createdAt));
-
-    const contextByVersionId = new Map<string, typeof workContexts.$inferSelect>();
-    for (const row of contextRows) {
-      if (!row.context.versionId || contextByVersionId.has(row.context.versionId)) continue;
-      contextByVersionId.set(row.context.versionId, row.context);
-    }
-
-    return versions.map((version) => {
-      const context = contextByVersionId.get(version.id);
-      return {
-        ...version,
-        context: context
-          ? {
-              createdAt: context.createdAt,
-              id: context.id,
-              metadata: context.metadata,
-              role: context.role,
-              source: context.source,
-              sourceType: context.sourceType,
-            }
-          : null,
-      };
-    });
+    return rows.map((row) => row.version);
   };
 }

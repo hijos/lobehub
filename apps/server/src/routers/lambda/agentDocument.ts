@@ -237,7 +237,6 @@ const registerDocumentWorkFromTool = async (input: {
   registrar: DocumentWorkRegistrar;
   role: 'created' | 'updated';
   source: string;
-  title?: string | null;
   toolContext?: z.infer<typeof agentDocumentToolContextSchema>;
   topicId?: string;
 }) => {
@@ -258,7 +257,6 @@ const registerDocumentWorkFromTool = async (input: {
     documentId: input.documentId,
     role: input.role,
     source: input.source,
-    title: input.title,
   });
 };
 
@@ -1048,7 +1046,6 @@ export const agentDocumentRouter = router({
             documentId: doc?.documentId,
             role: 'created',
             source: 'createDocument',
-            title: doc?.title ?? input.title,
             toolContext: input.toolContext,
             registrar: ctx.documentWorkRegistrar,
           });
@@ -1118,7 +1115,6 @@ export const agentDocumentRouter = router({
             documentId: doc?.documentId,
             role: 'created',
             source: 'createForTopic',
-            title: doc?.title ?? title,
             toolContext: input.toolContext,
             topicId: input.topicId,
             registrar: ctx.documentWorkRegistrar,
@@ -1188,7 +1184,6 @@ export const agentDocumentRouter = router({
           documentId: doc?.documentId,
           role: 'updated',
           source: 'modifyNodes',
-          title: doc?.title,
           toolContext: input.toolContext,
           registrar: ctx.documentWorkRegistrar,
         });
@@ -1224,7 +1219,6 @@ export const agentDocumentRouter = router({
           documentId: doc?.documentId,
           role: 'updated',
           source: 'replaceDocumentContent',
-          title: doc?.title,
           toolContext: input.toolContext,
           registrar: ctx.documentWorkRegistrar,
         });
@@ -1287,7 +1281,6 @@ export const agentDocumentRouter = router({
             documentId: doc?.documentId,
             role: 'created',
             source: 'copyDocument',
-            title: doc?.title ?? input.newTitle,
             toolContext: input.toolContext,
             registrar: ctx.documentWorkRegistrar,
           });
@@ -1327,7 +1320,6 @@ export const agentDocumentRouter = router({
             documentId: doc?.documentId,
             role: 'updated',
             source: 'renameDocument',
-            title: doc?.title ?? input.newTitle,
             toolContext: input.toolContext,
             registrar: ctx.documentWorkRegistrar,
           });

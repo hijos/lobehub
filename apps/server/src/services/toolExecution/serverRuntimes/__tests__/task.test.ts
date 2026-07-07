@@ -225,11 +225,9 @@ describe('createTaskRuntime', () => {
         source: 'createTask',
         sourceMessageId: 'msg-tool',
         sourceToolCallId: 'tool-call-1',
-        sourceType: 'tool',
         taskId: 'task-1',
         taskIdentifier: 'T-1',
         threadId: 'thread-1',
-        title: undefined,
         topicId: 'topic-1',
       });
     });
@@ -517,7 +515,6 @@ describe('createTaskRuntime', () => {
           sourceToolCallId: 'tool-call-edit',
           taskId: 'task-1',
           taskIdentifier: 'T-1',
-          title: 'Edited',
         }),
       );
     });

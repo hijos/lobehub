@@ -90,7 +90,6 @@ const refreshConversationWorks = async (ctx?: BuiltinToolContext) => {
 interface TaskWorkTarget {
   taskId?: string;
   taskIdentifier?: string;
-  title?: string | null;
 }
 
 interface RegisterTaskWorkOptions extends TaskWorkTarget {
@@ -130,11 +129,9 @@ const registerTaskWorks = async ({
           source,
           sourceMessageId: ctx?.toolMessageId,
           sourceToolCallId: ctx?.toolCallId,
-          sourceType: 'tool',
           taskId: item.taskId,
           taskIdentifier: item.taskIdentifier,
           threadId: ctx?.threadId,
-          title: item.title,
           topicId: ctx?.topicId,
         })
         .catch((error) => {
@@ -315,7 +312,7 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
           },
           success: true,
         },
-        work: { taskId: task.id, taskIdentifier: task.identifier, title: task.name },
+        work: { taskId: task.id, taskIdentifier: task.identifier },
       };
     } catch (error) {
       log('[TaskExecutor] createTask - error:', error);
@@ -538,7 +535,6 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
         role: 'updated',
         source: TaskApiName.editTask,
         taskIdentifier: identifier,
-        title: params.name,
       });
 
       return {

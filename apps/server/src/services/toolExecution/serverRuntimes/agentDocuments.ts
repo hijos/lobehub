@@ -127,7 +127,6 @@ export const agentDocumentsRuntime: ServerRuntimeRegistration = {
       documentId?: string;
       role: 'created' | 'updated';
       source: string;
-      title?: string | null;
     }) =>
       workRegistrar.registerDocumentWork({
         ...input,
@@ -165,7 +164,6 @@ export const agentDocumentsRuntime: ServerRuntimeRegistration = {
             documentId: doc?.documentId,
             role: 'created',
             source: 'copyDocument',
-            title: doc?.title ?? newTitle,
           });
           return doc;
         },
@@ -190,7 +188,6 @@ export const agentDocumentsRuntime: ServerRuntimeRegistration = {
             documentId: doc?.documentId,
             role: 'created',
             source: 'createDocument',
-            title: doc?.title ?? title,
           });
           return doc;
         },
@@ -215,7 +212,6 @@ export const agentDocumentsRuntime: ServerRuntimeRegistration = {
             documentId: doc?.documentId,
             role: 'created',
             source: 'createTopicDocument',
-            title: doc?.title ?? title,
           });
           return doc;
         },
@@ -265,7 +261,6 @@ export const agentDocumentsRuntime: ServerRuntimeRegistration = {
             documentId: doc?.documentId,
             role: 'updated',
             source: 'modifyNodes',
-            title: doc?.title,
           });
           return doc;
         },
@@ -310,7 +305,6 @@ export const agentDocumentsRuntime: ServerRuntimeRegistration = {
             documentId: doc?.documentId,
             role: 'updated',
             source: 'renameDocument',
-            title: doc?.title ?? newTitle,
           });
           return doc;
         },
@@ -332,7 +326,6 @@ export const agentDocumentsRuntime: ServerRuntimeRegistration = {
             documentId: doc?.documentId,
             role: 'updated',
             source: 'replaceDocumentContent',
-            title: doc?.title,
           });
           return doc;
         },

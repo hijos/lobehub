@@ -129,7 +129,6 @@ describe('TaskExecutor.onAfterCall — portal auto-open', () => {
         source: TaskApiName.setTaskVerify,
         sourceMessageId: 'msg-tool-1',
         sourceToolCallId: 'tool-call-1',
-        sourceType: 'tool',
         taskIdentifier: 'TASK-1',
         threadId: 'thread-1',
         topicId: 'topic-1',

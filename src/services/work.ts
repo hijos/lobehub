@@ -2,13 +2,13 @@ import type {
   RegisterSkillToolResultWorkParams,
   RegisterTaskWorkParams,
   UpdateWorkVersionCumulativeUsageParams,
-  WorkContextVersionItem,
-  WorkContextVersionMap,
   WorkItem,
   WorkListItem,
   WorkSummaryItem,
   WorkSummaryMap,
-  WorkVersionListItem,
+  WorkVersionEventItem,
+  WorkVersionEventMap,
+  WorkVersionItem,
 } from '@lobechat/types';
 
 import { mutate } from '@/libs/swr';
@@ -25,12 +25,12 @@ class WorkService {
   listByRootOperation = async (params: {
     limit?: number;
     rootOperationId?: string | null;
-  }): Promise<WorkContextVersionItem[]> => lambdaClient.work.listByRootOperation.query(params);
+  }): Promise<WorkVersionEventItem[]> => lambdaClient.work.listByRootOperation.query(params);
 
   listByRootOperations = async (params: {
     limit?: number;
     rootOperationIds?: string[] | null;
-  }): Promise<WorkContextVersionMap> => lambdaClient.work.listByRootOperations.query(params);
+  }): Promise<WorkVersionEventMap> => lambdaClient.work.listByRootOperations.query(params);
 
   listSummariesByConversation = async (params: {
     limit?: number;
@@ -43,7 +43,7 @@ class WorkService {
     rootOperationIds?: string[] | null;
   }): Promise<WorkSummaryMap> => lambdaClient.work.listSummariesByRootOperations.query(params);
 
-  listVersions = async (workId: string): Promise<WorkVersionListItem[]> =>
+  listVersions = async (workId: string): Promise<WorkVersionItem[]> =>
     lambdaClient.work.listVersions.query({ workId });
 
   registerTask = async (params: RegisterTaskWorkParams): Promise<WorkItem | null> =>

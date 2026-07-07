@@ -17,7 +17,7 @@ const MAX_INFLIGHT = 20; // bounded concurrency
 
 /**
  * Decorator that wraps an IStreamEventManager and additionally
- * pushes events to the Agent Gateway via HTTP (fire-and-forget).
+ * pushes events to the Agent Gateway via HTTP.
  *
  * Redis SSE remains the primary event storage / subscription mechanism.
  * The Gateway is an additional push channel for WebSocket delivery.
@@ -133,7 +133,7 @@ export class GatewayStreamNotifier implements IStreamEventManager {
     const effectiveReasonDetail = reasonDetail || getDefaultReasonDetail(finalState, reason);
     const errorType = finalState?.error?.type || finalState?.error?.errorType;
 
-    void this.pushEvent(operationId, {
+    await this.pushEvent(operationId, {
       // Forward `uiMessages` to the gateway push channel so terminal-state
       // clients consuming /push-event get the canonical UIChatMessage[]
       // snapshot — the final step has no later step_start to carry a fresh

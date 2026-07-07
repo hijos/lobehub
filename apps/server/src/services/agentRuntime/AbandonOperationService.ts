@@ -20,6 +20,20 @@ import { createDefaultSnapshotStore } from './snapshotStore';
 
 const log = debug('lobe-server:abandon-operation');
 
+type TerminalCompletionReason = 'done' | 'error' | 'interrupted';
+type GatewayTerminalStatus = 'completed' | 'error' | 'interrupted';
+
+const TERMINAL_COMPLETION_REASONS = new Set<string>(['done', 'error', 'interrupted']);
+
+const toTerminalCompletionReason = (value: unknown): TerminalCompletionReason | undefined => {
+  return typeof value === 'string' && TERMINAL_COMPLETION_REASONS.has(value)
+    ? (value as TerminalCompletionReason)
+    : undefined;
+};
+
+const toGatewayTerminalStatus = (reason: TerminalCompletionReason): GatewayTerminalStatus =>
+  reason === 'done' ? 'completed' : reason;
+
 interface AbandonOperationOptions {
   coordinator?: AgentRuntimeCoordinator;
   snapshotStore?: ISnapshotStore | null;
@@ -49,15 +63,23 @@ export interface FinalizeAbandonedResult {
   abandoned?: boolean;
   /** Whether the assistant message was successfully marked as errored. */
   assistantMessageUpdated: boolean;
+  /** Existing terminal completion reason when the op already finished before watchdog finalize. */
+  completionReason?: TerminalCompletionReason;
   /** Whether the operation was finalized into a snapshot (false if no partial existed). */
   finalized: boolean;
   /** Whether agent state was found in Redis. */
   found: boolean;
+  /** Gateway-readable terminal status used to reconcile phantom inactivity timeouts. */
+  reconciledStatus?: GatewayTerminalStatus;
   /**
    * Set when the abandoned op was a sub-agent parked under a parent's
    * `callSubAgent`. The caller MUST bridge this to resume the parent.
    */
   subAgentResume?: AbandonedSubAgentResume;
+  /** True when finalize-abandoned discovered the operation had already reached a terminal state. */
+  terminal?: boolean;
+  /** Alias for gateway watchdogs that key off terminalStatus instead of reconciledStatus. */
+  terminalStatus?: GatewayTerminalStatus;
 }
 
 /**
@@ -111,6 +133,26 @@ export class AbandonOperationService {
       userId?: string;
       workspaceId?: string;
     };
+
+    const partial = this.snapshotStore
+      ? await this.snapshotStore.loadPartial(operationId).catch(() => null)
+      : null;
+    const terminalReason =
+      this.inferTerminalFromState(state) ??
+      this.inferTerminalFromPartial(partial) ??
+      (await this.inferTerminalFromAssistantMessage(metadata));
+    if (terminalReason) {
+      this.markTerminal(result, terminalReason);
+      await this.cleanupCoordinator(operationId);
+      log(
+        '[%s] watchdog saw already-terminal op (reason=%s): %O',
+        operationId,
+        terminalReason,
+        result,
+      );
+      return result;
+    }
+
     const message = `Operation abandoned: ${reason}`;
     const error: ChatMessageError = {
       body: { message },
@@ -120,9 +162,6 @@ export class AbandonOperationService {
 
     // Synthesize a failed-step record at index = lastCompleted + 1 so consumers
     // see the operation ended at a step that never produced data.
-    const partial = this.snapshotStore
-      ? await this.snapshotStore.loadPartial(operationId).catch(() => null)
-      : null;
     const lastStepIndex = partial?.steps?.length
       ? Math.max(...partial.steps.map((s) => s.stepIndex))
       : -1;
@@ -209,11 +248,7 @@ export class AbandonOperationService {
     // the coordinator metadata, so deleting it now would 401 every redelivery
     // and strand the parent. The lingering state expires on its own Redis TTL.
     if (!result.subAgentResume) {
-      try {
-        await this.coordinator.deleteAgentOperation(operationId);
-      } catch (e) {
-        log('[%s] coordinator cleanup failed (non-fatal): %O', operationId, e);
-      }
+      await this.cleanupCoordinator(operationId);
     }
 
     log('[%s] abandoned op finalized (reason=%s): %O', operationId, reason, result);
@@ -226,6 +261,12 @@ export class AbandonOperationService {
     result: FinalizeAbandonedResult,
   ): Promise<void> {
     const op = await this.findOperationRow(operationId);
+    const terminalReason = this.inferTerminalFromOperationRow(op);
+    if (terminalReason) {
+      this.markTerminal(result, terminalReason);
+      return;
+    }
+
     if (!op || !['running', 'waiting_for_human', 'waiting_for_async_tool'].includes(op.status)) {
       return;
     }
@@ -282,6 +323,59 @@ export class AbandonOperationService {
     }
   }
 
+  private markTerminal(
+    result: FinalizeAbandonedResult,
+    completionReason: TerminalCompletionReason,
+  ): void {
+    const gatewayStatus = toGatewayTerminalStatus(completionReason);
+    result.completionReason = completionReason;
+    result.reconciledStatus = gatewayStatus;
+    result.terminal = true;
+    result.terminalStatus = gatewayStatus;
+  }
+
+  private inferTerminalFromState(state: any): TerminalCompletionReason | undefined {
+    return toTerminalCompletionReason(state?.status) ?? toTerminalCompletionReason(state?.reason);
+  }
+
+  private inferTerminalFromPartial(partial: any): TerminalCompletionReason | undefined {
+    return toTerminalCompletionReason(partial?.completionReason);
+  }
+
+  private inferTerminalFromOperationRow(
+    op: typeof agentOperations.$inferSelect | null | undefined,
+  ): TerminalCompletionReason | undefined {
+    if (!op) return undefined;
+    return toTerminalCompletionReason(op.completionReason) ?? toTerminalCompletionReason(op.status);
+  }
+
+  private async inferTerminalFromAssistantMessage(metadata: {
+    assistantMessageId?: string;
+    userId?: string;
+    workspaceId?: string;
+  }): Promise<TerminalCompletionReason | undefined> {
+    if (!metadata.userId || !metadata.assistantMessageId) return undefined;
+
+    try {
+      const messageModel = new MessageModel(this.db, metadata.userId, metadata.workspaceId);
+      const assistant = await messageModel.findById(metadata.assistantMessageId);
+      if (!assistant) return undefined;
+      if ((assistant as any).error) return 'error';
+    } catch (e) {
+      log('[%s] terminal assistant lookup failed (non-fatal): %O', metadata.assistantMessageId, e);
+    }
+
+    return undefined;
+  }
+
+  private async cleanupCoordinator(operationId: string): Promise<void> {
+    try {
+      await this.coordinator.deleteAgentOperation(operationId);
+    } catch (e) {
+      log('[%s] coordinator cleanup failed (non-fatal): %O', operationId, e);
+    }
+  }
+
   private async resolveAssistantMessageIdForOperation(
     op: typeof agentOperations.$inferSelect,
     operationId: string,
@@ -293,8 +387,7 @@ export class AbandonOperationService {
         topicModel = new TopicModel(this.db, op.userId, op.workspaceId ?? undefined);
         const topic = await topicModel.findById(op.topicId);
         const running = topic?.metadata?.runningOperation as
-          | { assistantMessageId?: string; operationId?: string }
-          | undefined;
+          { assistantMessageId?: string; operationId?: string } | undefined;
 
         if (running?.operationId && running.operationId !== operationId) return undefined;
 

@@ -42,6 +42,8 @@ describe('GatewayStreamNotifier', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({ ok: true, text: () => Promise.resolve('') });
     inner = createMockInner();
     notifier = new GatewayStreamNotifier(inner, gatewayUrl, serviceToken);
   });
@@ -193,6 +195,82 @@ describe('GatewayStreamNotifier', () => {
       expect(urls).toContain(`${gatewayUrl}/api/operations/push-event`);
       // Gateway handles session completion directly in pushEvent on agent_runtime_end
       expect(urls).not.toContain(`${gatewayUrl}/api/operations/update-status`);
+    });
+
+    it('awaits the terminal gateway push before resolving', async () => {
+      let resolveFetch!: () => void;
+      mockFetch.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFetch = () => resolve({ ok: true, text: () => Promise.resolve('') });
+          }),
+      );
+
+      const result = notifier.publishAgentRuntimeEnd({
+        finalState: { status: 'done' },
+        operationId: 'op-1',
+        reason: 'completed',
+        stepIndex: 2,
+      });
+      let resolved = false;
+      void result.then(() => {
+        resolved = true;
+      });
+
+      await Promise.resolve();
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        `${gatewayUrl}/api/operations/push-event`,
+        expect.objectContaining({ method: 'POST' }),
+      );
+      expect(resolved).toBe(false);
+
+      resolveFetch();
+
+      await expect(result).resolves.toBe('publishAgentRuntimeEnd-result');
+      expect(resolved).toBe(true);
+    });
+
+    it('awaits both primary and mirror terminal pushes before resolving', async () => {
+      await notifier.publishAgentRuntimeInit('op-member', { mirrorToOperationId: 'op-supervisor' });
+      await new Promise((r) => setTimeout(r, 0));
+      mockFetch.mockClear();
+
+      const resolvers: Array<() => void> = [];
+      mockFetch.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolvers.push(() => resolve({ ok: true, text: () => Promise.resolve('') }));
+          }),
+      );
+
+      const result = notifier.publishAgentRuntimeEnd({
+        finalState: { status: 'done' },
+        operationId: 'op-member',
+        reason: 'completed',
+        stepIndex: 2,
+      });
+      let resolved = false;
+      void result.then(() => {
+        resolved = true;
+      });
+
+      await Promise.resolve();
+
+      const pushCalls = mockFetch.mock.calls.filter((c: any[]) =>
+        String(c[0]).includes('/api/operations/push-event'),
+      );
+      expect(pushCalls).toHaveLength(2);
+      expect(resolved).toBe(false);
+
+      resolvers[0]();
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      resolvers[1]();
+
+      await expect(result).resolves.toBe('publishAgentRuntimeEnd-result');
+      expect(resolved).toBe(true);
     });
 
     it('computes effectiveReasonDetail when reasonDetail is omitted', async () => {

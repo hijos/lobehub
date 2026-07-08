@@ -1,5 +1,5 @@
-import { type SelectProps } from '@lobehub/ui';
-import { ActionIcon, Flexbox, Icon, Select } from '@lobehub/ui';
+import { ActionIcon, Flexbox, Icon } from '@lobehub/ui';
+import { Select, type SelectProps } from '@lobehub/ui/base-ui';
 import { createStaticStyles, cssVar } from 'antd-style';
 import { LucideArrowRight, LucideBolt } from 'lucide-react';
 import { memo, useMemo } from 'react';
@@ -65,16 +65,12 @@ const ModelSelect = memo(() => {
       if (modelOptions.length === 0) {
         return [
           {
-            disabled: true,
             label: (
               <Flexbox horizontal gap={8} style={{ color: cssVar.colorTextTertiary }}>
                 {t('ModelSwitchPanel.emptyModel')}
                 <Icon icon={LucideArrowRight} />
               </Flexbox>
             ),
-            onClick: () => {
-              navigate(`/settings/provider/${provider.id}`);
-            },
             value: `${provider.id}/empty`,
           },
         ];
@@ -87,16 +83,12 @@ const ModelSelect = memo(() => {
     if (enabledImageModelList.length === 0) {
       return [
         {
-          disabled: true,
           label: (
             <Flexbox horizontal gap={8} style={{ color: cssVar.colorTextTertiary }}>
               {t('ModelSwitchPanel.emptyProvider')}
               <Icon icon={LucideArrowRight} />
             </Flexbox>
           ),
-          onClick: () => {
-            navigate('/settings/provider/all');
-          },
           value: 'no-provider',
         },
       ];
@@ -162,8 +154,14 @@ const ModelSelect = memo(() => {
         width: '100%',
       }}
       onChange={(value, option) => {
-        // Skip onChange for disabled options (empty states)
-        if (value === 'no-provider' || value.includes('/empty')) return;
+        if (value === 'no-provider') {
+          navigate('/settings/provider/all');
+          return;
+        }
+        if (value.includes('/empty')) {
+          navigate(`/settings/provider/${value.split('/')[0]}`);
+          return;
+        }
         const model = value.split('/').slice(1).join('/');
         const provider = (option as unknown as ModelOption).provider;
         if (model !== currentModel || provider !== currentProvider) {

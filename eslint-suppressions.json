@@ -31,12 +31,12 @@
   },
   "src/components/InvalidAPIKey/Bedrock.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/InvalidAPIKey/ComfyUIForm.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/InvalidAPIKey/ProviderApiKeyForm.tsx": {
@@ -50,11 +50,6 @@
     }
   },
   "src/components/InvalidAPIKey/index.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/JSONSchemaConfig/ItemRender.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -80,11 +75,6 @@
     }
   },
   "src/features/AgentMockDevtools/views/FixtureView.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/features/AgentSetting/AgentMeta/AutoGenerateSelect.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -146,7 +136,7 @@
   },
   "src/features/AgentTasks/AgentTaskDetail/TaskVerifyConfig.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/features/AgentTasks/AgentTaskDetail/TopicChatDrawer/FeedbackInput.tsx": {
@@ -155,11 +145,6 @@
     }
   },
   "src/features/AgentTasks/AgentTaskDetail/VerifyCriterionModal/VerifyCriterionForm.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/features/AgentTasks/AgentTaskList/TasksGroupConfig.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -259,11 +244,6 @@
       "count": 1
     }
   },
-  "src/features/ChatInput/ActionBar/Params/Controls.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/features/ChatInput/ControlBar/ApprovalMode.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -315,11 +295,6 @@
     }
   },
   "src/features/Conversation/Messages/AgentCouncil/components/ScrollShadowWithButton.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/features/Conversation/Messages/AssistantGroup/Tool/Debug/index.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -500,11 +475,6 @@
     }
   },
   "src/features/MCPPluginDetail/Header.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/features/MCPPluginDetail/Score/GithubBadge/index.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -844,26 +814,6 @@
       "count": 1
     }
   },
-  "src/routes/(main)/(create)/image/features/ConfigPanel/components/ModelSelect/index.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/routes/(main)/(create)/image/features/ConfigPanel/components/QualitySelect.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/routes/(main)/(create)/image/features/ConfigPanel/components/Select/index.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/routes/(main)/(create)/video/features/ConfigPanel/components/ModelSelect/index.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/routes/(main)/[workspaceSlug]/settings/devices/index.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -961,7 +911,7 @@
   },
   "src/routes/(main)/community/(detail)/skill/features/Sidebar/Platform.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/routes/(main)/community/(detail)/user/features/Header/index.tsx": {
@@ -1094,17 +1044,7 @@
       "count": 1
     }
   },
-  "src/routes/(main)/eval/features/BenchmarkEditModal/Content.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/routes/(main)/eval/features/BenchmarkEditModal/Footer.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/routes/(main)/eval/features/CreateBenchmarkModal/Content.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -1170,11 +1110,6 @@
     }
   },
   "src/routes/(main)/memory/features/ActionBar/PurgeButton.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/routes/(main)/memory/features/FilterBar.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -1275,21 +1210,6 @@
     }
   },
   "src/routes/(main)/settings/profile/features/UsernameRow.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/routes/(main)/settings/provider/detail/bedrock/index.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/routes/(main)/settings/provider/detail/comfyui/index.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/routes/(main)/settings/provider/detail/vertexai/index.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -1396,7 +1316,7 @@
   },
   "src/routes/onboarding/features/ResponseLanguageStep.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/routes/onboarding/features/TelemetryStep.tsx": {

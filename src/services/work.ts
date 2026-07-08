@@ -49,6 +49,9 @@ class WorkService {
   registerTask = async (params: RegisterTaskWorkParams): Promise<WorkItem | null> =>
     lambdaClient.work.registerTask.mutate(params);
 
+  deleteTaskWork = async (params: { taskId: string }): Promise<void> =>
+    lambdaClient.work.deleteTaskWork.mutate(params);
+
   handleSkillToolResult = async (
     params: RegisterSkillToolResultWorkParams,
   ): Promise<WorkItem | null> => {

@@ -1,6 +1,7 @@
 import type {
   BuiltinToolResult,
   LobeBuiltinTool,
+  PluginApiWorkAction,
   PluginApiWorkConfig,
   WorkVersionRole,
 } from '@lobechat/types';
@@ -25,11 +26,16 @@ export interface TaskWorkTarget {
   taskIdentifier?: string;
 }
 
-/** A resolved Work registration plan: the version role plus the targets to persist. */
-export interface ResolvedWorkRegistration {
-  role: WorkVersionRole;
-  targets: TaskWorkTarget[];
-}
+/**
+ * A resolved Work registration plan. Discriminated by `action` so each dispatch
+ * layer branches "persist a version" (create/update, which carry a version
+ * `role`) vs "delete the Work" (which carries no role — a deletion has no
+ * version to write). Keeping delete out of the role-bearing variant is what
+ * eliminates the old `action: 'delete' → role: 'updated'` silent mis-mapping.
+ */
+export type ResolvedWorkRegistration =
+  | { action: 'create' | 'update'; role: WorkVersionRole; targets: TaskWorkTarget[] }
+  | { action: 'delete'; targets: TaskWorkTarget[] };
 
 /**
  * Look up the declarative `work` config for a tool API from a builtin-tool
@@ -46,9 +52,14 @@ export const getApiWorkConfig = (
     .find((tool) => tool.identifier === identifier)
     ?.manifest.api.find((api) => api.name === apiName)?.work;
 
-/** Map a declarative Work action onto the persisted version role. */
-export const workRoleFromAction = (action: PluginApiWorkConfig['action']): WorkVersionRole =>
-  action === 'create' ? 'created' : 'updated';
+/**
+ * Map a version-producing Work action onto the persisted version role. Only
+ * `create` / `update` reach this — `delete` writes no version, so it is
+ * deliberately excluded from the input type rather than silently mapped.
+ */
+export const workRoleFromAction = (
+  action: Exclude<PluginApiWorkAction, 'delete'>,
+): WorkVersionRole => (action === 'create' ? 'created' : 'updated');
 
 const asString = (value: unknown): string | undefined =>
   typeof value === 'string' && value.length > 0 ? value : undefined;
@@ -133,5 +144,9 @@ export const resolveWorkRegistration = (
   const targets = extractTaskWorkTargets(payload);
   if (targets.length === 0) return undefined;
 
-  return { role: workRoleFromAction(config.action), targets };
+  // `delete` locates the Work by `state.taskId` (the task row is already gone),
+  // so it reuses the same target extraction but writes no version role.
+  if (config.action === 'delete') return { action: 'delete', targets };
+
+  return { action: config.action, role: workRoleFromAction(config.action), targets };
 };

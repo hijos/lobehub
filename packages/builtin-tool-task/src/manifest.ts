@@ -446,6 +446,10 @@ export const TaskManifest: BuiltinToolManifest = {
         required: ['identifier'],
         type: 'object',
       },
+      work: {
+        action: 'delete',
+        resourceType: 'task',
+      },
     },
   ],
   identifier: TaskIdentifier,

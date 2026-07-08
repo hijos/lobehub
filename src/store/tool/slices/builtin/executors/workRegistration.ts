@@ -32,8 +32,31 @@ export const registerBuiltinToolWork = async (
   if (!resolved) return;
 
   try {
-    const { role, targets } = resolved;
     const rootOperationId = ctx?.rootOperationId ?? ctx?.operationId;
+
+    // Tool-driven delete: drop the task's Work (versions cascade server-side),
+    // then refresh the shared caches so the sidebar drops it. Non-tool deletes
+    // (UI / CLI) leave the Work orphaned for the UI to mark as "deleted".
+    if (resolved.action === 'delete') {
+      await Promise.all(
+        resolved.targets.map((target) =>
+          target.taskId
+            ? workService.deleteTaskWork({ taskId: target.taskId }).catch((error) => {
+                log('deleteTaskWork failed: %O', error);
+              })
+            : undefined,
+        ),
+      );
+      await Promise.all([
+        workService.refreshConversation(ctx?.topicId, ctx?.threadId),
+        workService.refreshRootOperation(rootOperationId),
+      ]).catch((error) => {
+        log('refresh work caches failed: %O', error);
+      });
+      return;
+    }
+
+    const { role, targets } = resolved;
 
     const works = await Promise.all(
       targets.map((target) =>

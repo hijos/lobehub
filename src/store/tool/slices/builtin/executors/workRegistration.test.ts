@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  deleteTaskWork: vi.fn(),
   refreshConversation: vi.fn(),
   refreshRootOperation: vi.fn(),
   refreshVersions: vi.fn(),
@@ -16,6 +17,7 @@ vi.mock('@lobechat/builtin-tools', () => ({
           { name: 'createTask', work: { action: 'create', resourceType: 'task' } },
           { name: 'createTasks', work: { action: 'create', resourceType: 'task' } },
           { name: 'editTask', work: { action: 'update', resourceType: 'task' } },
+          { name: 'deleteTask', work: { action: 'delete', resourceType: 'task' } },
           { name: 'listTasks' },
         ],
       },
@@ -25,6 +27,7 @@ vi.mock('@lobechat/builtin-tools', () => ({
 
 vi.mock('@/services/work', () => ({
   workService: {
+    deleteTaskWork: mocks.deleteTaskWork,
     refreshConversation: mocks.refreshConversation,
     refreshRootOperation: mocks.refreshRootOperation,
     refreshVersions: mocks.refreshVersions,
@@ -48,6 +51,7 @@ describe('registerBuiltinToolWork (client dispatch)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.registerTask.mockResolvedValue({ id: 'work-1' });
+    mocks.deleteTaskWork.mockResolvedValue(undefined);
     mocks.refreshConversation.mockResolvedValue(undefined);
     mocks.refreshRootOperation.mockResolvedValue(undefined);
     mocks.refreshVersions.mockResolvedValue(undefined);
@@ -113,6 +117,30 @@ describe('registerBuiltinToolWork (client dispatch)', () => {
     );
     // Caches refresh once for the whole batch, not per item.
     expect(mocks.refreshConversation).toHaveBeenCalledTimes(1);
+  });
+
+  it('deletes the task work and refreshes caches, without registering a version', async () => {
+    await registerBuiltinToolWork('lobe-task', 'deleteTask', { identifier: 'T-1' }, ctx, {
+      content: '',
+      state: { identifier: 'T-1', success: true, taskId: 'task_1' },
+      success: true,
+    });
+
+    expect(mocks.deleteTaskWork).toHaveBeenCalledWith({ taskId: 'task_1' });
+    expect(mocks.registerTask).not.toHaveBeenCalled();
+    expect(mocks.refreshConversation).toHaveBeenCalledWith('topic-1', 'thread-1');
+    expect(mocks.refreshRootOperation).toHaveBeenCalledWith('op-root');
+    // No work id survives a delete, so version lists are not refreshed.
+    expect(mocks.refreshVersions).not.toHaveBeenCalled();
+  });
+
+  it('does not delete when the delete call failed (no taskId target)', async () => {
+    await registerBuiltinToolWork('lobe-task', 'deleteTask', { identifier: 'T-1' }, ctx, {
+      content: 'boom',
+      success: false,
+    });
+
+    expect(mocks.deleteTaskWork).not.toHaveBeenCalled();
   });
 
   it('is a no-op for an API without a work config', async () => {

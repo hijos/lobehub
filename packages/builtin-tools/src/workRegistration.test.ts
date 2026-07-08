@@ -1,7 +1,12 @@
 import type { LobeBuiltinTool } from '@lobechat/types';
 import { describe, expect, it } from 'vitest';
 
-import { extractTaskWorkTargets, getApiWorkConfig, workRoleFromAction } from './workRegistration';
+import {
+  extractTaskWorkTargets,
+  getApiWorkConfig,
+  resolveWorkRegistration,
+  workRoleFromAction,
+} from './workRegistration';
 
 const registry = [
   {
@@ -11,6 +16,7 @@ const registry = [
         { name: 'createTask', work: { action: 'create', resourceType: 'task' } },
         { name: 'createTasks', work: { action: 'create', resourceType: 'task' } },
         { name: 'editTask', work: { action: 'update', resourceType: 'task' } },
+        { name: 'deleteTask', work: { action: 'delete', resourceType: 'task' } },
         { name: 'listTasks' },
       ],
     },
@@ -36,10 +42,11 @@ describe('getApiWorkConfig', () => {
 });
 
 describe('workRoleFromAction', () => {
-  it('maps create → created and everything else → updated', () => {
+  it('maps create → created and update → updated', () => {
     expect(workRoleFromAction('create')).toBe('created');
     expect(workRoleFromAction('update')).toBe('updated');
-    expect(workRoleFromAction('delete')).toBe('updated');
+    // `delete` is excluded from the input type — it writes no version role and
+    // must never be silently mapped to 'updated' (see resolveWorkRegistration).
   });
 });
 
@@ -111,5 +118,61 @@ describe('extractTaskWorkTargets', () => {
         result: { state: { failed: 0, results: [], succeeded: 0 }, success: false },
       }),
     ).toEqual([]);
+  });
+});
+
+describe('resolveWorkRegistration', () => {
+  it('resolves create/update into a role-bearing plan', () => {
+    expect(
+      resolveWorkRegistration(registry, 'lobe-task', 'createTask', {
+        args: {},
+        result: { state: { identifier: 'T-1', taskId: 'task_1', success: true }, success: true },
+      }),
+    ).toEqual({
+      action: 'create',
+      role: 'created',
+      targets: [{ taskId: 'task_1', taskIdentifier: 'T-1' }],
+    });
+
+    expect(
+      resolveWorkRegistration(registry, 'lobe-task', 'editTask', {
+        args: { identifier: 'T-9' },
+        result: { success: true },
+      }),
+    ).toEqual({
+      action: 'update',
+      role: 'updated',
+      targets: [{ taskId: undefined, taskIdentifier: 'T-9' }],
+    });
+  });
+
+  it('resolves delete into a role-less plan keyed off state.taskId', () => {
+    expect(
+      resolveWorkRegistration(registry, 'lobe-task', 'deleteTask', {
+        args: { identifier: 'T-1' },
+        result: { state: { identifier: 'T-1', taskId: 'task_1', success: true }, success: true },
+      }),
+    ).toEqual({
+      action: 'delete',
+      targets: [{ taskId: 'task_1', taskIdentifier: 'T-1' }],
+    });
+  });
+
+  it('returns undefined when a delete call yields no extractable target', () => {
+    expect(
+      resolveWorkRegistration(registry, 'lobe-task', 'deleteTask', {
+        args: { identifier: 'T-1' },
+        result: { success: false },
+      }),
+    ).toBeUndefined();
+  });
+
+  it('returns undefined for an API without a work config', () => {
+    expect(
+      resolveWorkRegistration(registry, 'lobe-task', 'listTasks', {
+        args: {},
+        result: { success: true },
+      }),
+    ).toBeUndefined();
   });
 });

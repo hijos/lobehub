@@ -286,6 +286,11 @@ export interface DeleteDocumentWorkParams {
   documentId: string;
 }
 
+export interface DeleteTaskWorkParams {
+  /** Internal task id (`works.resourceId` for `resourceType: 'task'`). */
+  taskId: string;
+}
+
 export interface RegisterLinearWorkParams {
   actorAgentId?: string | null;
   assignee?: string | null;

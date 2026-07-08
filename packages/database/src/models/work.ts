@@ -1,5 +1,6 @@
 import type {
   DeleteDocumentWorkParams,
+  DeleteTaskWorkParams,
   DocumentWorkListItem,
   DocumentWorkSummaryItem,
   DocumentWorkVersionEventItem,
@@ -763,6 +764,24 @@ export class WorkModel {
       .delete(works)
       .where(
         and(this.ownership(), eq(works.resourceType, 'document'), eq(works.resourceId, doc.id)),
+      );
+  };
+
+  /**
+   * Delete the task Work (and its versions via the `work_versions.workId`
+   * cascade) for a task the agent removed through the deleteTask tool.
+   *
+   * Unlike {@link deleteDocumentWork} this does NOT re-resolve the resource
+   * first: the task row is already gone by the time the tool-execution dispatch
+   * layer calls this, so we can only locate the Work by its polymorphic
+   * `resourceId` (= the task's internal id, captured into `result.state.taskId`
+   * before deletion). Ownership still scopes the delete to the caller.
+   */
+  deleteTaskWork = async (params: DeleteTaskWorkParams): Promise<void> => {
+    await this.db
+      .delete(works)
+      .where(
+        and(this.ownership(), eq(works.resourceType, 'task'), eq(works.resourceId, params.taskId)),
       );
   };
 

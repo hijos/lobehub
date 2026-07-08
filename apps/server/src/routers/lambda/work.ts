@@ -133,6 +133,10 @@ export const workRouter = router({
     .input(z.object({ workId: z.string().min(1) }))
     .query(async ({ ctx, input }) => ctx.workModel.listVersions(input.workId)),
 
+  deleteTaskWork: workProcedureWrite
+    .input(z.object({ taskId: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => ctx.workModel.deleteTaskWork(input)),
+
   registerTask: workProcedureWrite
     .input(registerTaskSchema)
     .mutation(async ({ ctx, input }) => ctx.workModel.registerTask(input)),

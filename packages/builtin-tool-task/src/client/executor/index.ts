@@ -316,18 +316,21 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
 
   deleteTask = async (
     params: { identifier: string },
-    ctx?: BuiltinToolContext,
+    _ctx?: BuiltinToolContext,
   ): Promise<BuiltinToolResult> => {
     try {
       log('[TaskExecutor] deleteTask - params:', params);
 
       const deleted = await getTaskStoreState().deleteTask(params.identifier);
       const label = deleted?.identifier ?? params.identifier;
-      await refreshConversationWorks(ctx);
 
       return {
         content: formatTaskDeleted(label, deleted?.name),
-        state: { identifier: label, success: true },
+        // Surface the deleted task's internal id so the manifest-driven dispatch
+        // layer (`work: { action: 'delete' }`) can delete its Work + refresh the
+        // conversation caches — the task row is gone, so the Work can only be
+        // located by `works.resourceId = taskId`.
+        state: { identifier: label, success: true, taskId: deleted?.id },
         success: true,
       };
     } catch (error) {

@@ -271,6 +271,10 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
 
       return {
         content: formatTaskDeleted(task.identifier, task.name),
+        // Surface the deleted task's internal id so the dispatch-layer Work
+        // deletion (`work: { action: 'delete' }`) can locate the Work by
+        // `works.resourceId = taskId` after the task row is gone.
+        state: { identifier: task.identifier, success: true, taskId: task.id },
         success: true,
       };
     },

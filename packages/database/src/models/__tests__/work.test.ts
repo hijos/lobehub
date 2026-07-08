@@ -15,16 +15,7 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getTestDB } from '../../core/getTestDB';
-import {
-  agents,
-  messages,
-  tasks,
-  threads,
-  topics,
-  users,
-  works,
-  workVersions,
-} from '../../schemas';
+import { agents, messages, threads, topics, users, works, workVersions } from '../../schemas';
 import type { LobeChatDatabase } from '../../type';
 import { AgentDocumentModel } from '../agentDocuments';
 import { TaskModel } from '../task';
@@ -1567,7 +1558,7 @@ describe('WorkModel', () => {
     ).toEqual({ 'op-other-summary': [] });
   });
 
-  it('deletes task work and cascades versions when the task is deleted', async () => {
+  it('deletes task work and cascades versions when removed via the tool dispatch path', async () => {
     const taskModel = new TaskModel(serverDB, userId);
     const workModel = new WorkModel(serverDB, userId);
     const task = await taskModel.create({ instruction: 'Delete task work', name: 'Delete me' });
@@ -1582,7 +1573,10 @@ describe('WorkModel', () => {
       topicId,
     });
 
+    // Tool-driven deletion: the task row is removed first, then the dispatch
+    // layer drops the Work by its internal id (LOBE-11606).
     await taskModel.delete(task.id);
+    await workModel.deleteTaskWork({ taskId: task.id });
 
     const workRows = await serverDB.select().from(works).where(eq(works.id, work!.id));
     const versionRows = await serverDB
@@ -1596,7 +1590,39 @@ describe('WorkModel', () => {
     expect(await workModel.listByConversation({ threadId, topicId })).toEqual([]);
   });
 
-  it('clears task works for the current owner without touching another owner', async () => {
+  it('leaves the task work orphaned when the task is deleted without the tool', async () => {
+    const taskModel = new TaskModel(serverDB, userId);
+    const workModel = new WorkModel(serverDB, userId);
+    const task = await taskModel.create({ instruction: 'Non-tool delete', name: 'Keep my Work' });
+
+    const work = await workModel.registerTask({
+      role: 'created',
+      rootOperationId: 'op-orphan-task',
+      source: 'createTask',
+      sourceToolCallId: 'tool-call-orphan-task',
+      taskId: task.id,
+      threadId,
+      topicId,
+    });
+
+    // UI / CLI delete (no tool dispatch): the Work row + versions survive as
+    // orphans so the UI can render "resource deleted" from the snapshot.
+    await taskModel.delete(task.id);
+
+    const workRows = await serverDB.select().from(works).where(eq(works.id, work!.id));
+    const versionRows = await serverDB
+      .select()
+      .from(workVersions)
+      .where(eq(workVersions.workId, work!.id));
+
+    expect(workRows).toHaveLength(1);
+    expect(versionRows.length).toBeGreaterThan(0);
+    // The task-joined lists no longer surface it (the tasks row is gone); the
+    // orphan is only reachable through its version snapshot.
+    expect(await workModel.listByConversation({ threadId, topicId })).toEqual([]);
+  });
+
+  it('scopes deleteTaskWork to the current owner without touching another owner', async () => {
     const taskModel = new TaskModel(serverDB, userId);
     const otherTaskModel = new TaskModel(serverDB, userId2);
     const workModel = new WorkModel(serverDB, userId);
@@ -1617,21 +1643,19 @@ describe('WorkModel', () => {
       taskId: otherTask.id,
     });
 
-    await taskModel.deleteAll();
+    // Wrong owner cannot delete another owner's Work; the right owner can.
+    await otherWorkModel.deleteTaskWork({ taskId: task.id });
+    const stillPresent = await serverDB.select().from(works).where(eq(works.id, work!.id));
+    expect(stillPresent).toHaveLength(1);
 
-    const deletedTasks = await serverDB.select().from(tasks).where(eq(tasks.id, task.id));
-    const remainingOtherTasks = await serverDB
-      .select()
-      .from(tasks)
-      .where(eq(tasks.id, otherTask.id));
+    await workModel.deleteTaskWork({ taskId: task.id });
+
     const deletedWorkRows = await serverDB.select().from(works).where(eq(works.id, work!.id));
     const remainingOtherWorkRows = await serverDB
       .select()
       .from(works)
       .where(eq(works.id, otherWork!.id));
 
-    expect(deletedTasks).toHaveLength(0);
-    expect(remainingOtherTasks).toHaveLength(1);
     expect(deletedWorkRows).toHaveLength(0);
     expect(remainingOtherWorkRows).toHaveLength(1);
   });

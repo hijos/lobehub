@@ -44,13 +44,25 @@ export const registerBuiltinToolWork = async ({
   if (!resolved) return;
 
   try {
-    const { role, targets } = resolved;
     const workModel = new WorkModel(
       context.serverDB ?? db,
       context.userId ?? userId,
       context.workspaceId,
     );
     const rootOperationId = context.rootOperationId ?? context.operationId;
+
+    // Tool-driven delete: drop the task's Work (versions cascade). Non-tool
+    // deletes leave the Work orphaned for the UI to mark as "deleted".
+    if (resolved.action === 'delete') {
+      await Promise.all(
+        resolved.targets.map((target) =>
+          target.taskId ? workModel.deleteTaskWork({ taskId: target.taskId }) : undefined,
+        ),
+      );
+      return;
+    }
+
+    const { role, targets } = resolved;
 
     await Promise.all(
       targets.map((target) =>

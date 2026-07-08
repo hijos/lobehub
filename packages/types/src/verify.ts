@@ -70,14 +70,6 @@ export const acceptanceStatuses = [
 ] as const;
 export type AcceptanceStatus = (typeof acceptanceStatuses)[number];
 
-/** Acceptance-level report verdict, distinct from per-check verify verdicts. */
-export const acceptanceReportVerdicts = ['accepted', 'rejected', 'uncertain'] as const;
-export type AcceptanceReportVerdict = (typeof acceptanceReportVerdicts)[number];
-
-/** Role of a verify run in one generated acceptance report. */
-export const acceptanceReportRunRoles = ['initial', 'repair', 'final', 'included'] as const;
-export type AcceptanceReportRunRole = (typeof acceptanceReportRunRoles)[number];
-
 /**
  * Acceptance policy/config snapshot. The source may be a task's `config.verify`,
  * a topic-level override, or a document acceptance rule, so it lives with the
@@ -93,11 +85,6 @@ export interface AcceptanceConfig {
 
 /** Generic acceptance extension bag for cross-subject state we have not modeled yet. */
 export interface AcceptanceMetadata {
-  [key: string]: unknown;
-}
-
-/** Generic acceptance-report extension bag for rendering / provenance extras. */
-export interface AcceptanceReportMetadata {
   [key: string]: unknown;
 }
 

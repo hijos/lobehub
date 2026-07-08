@@ -1,6 +1,6 @@
 import type { TaskStatus, WorkListItem, WorkSummaryItem, WorkVersionItem } from '@lobechat/types';
 import { Github } from '@lobehub/icons';
-import { ActionIcon, Center, Empty, Flexbox, Text } from '@lobehub/ui';
+import { ActionIcon, Center, Empty, Flexbox, Tag, Text } from '@lobehub/ui';
 import { createStaticStyles } from 'antd-style';
 import {
   ChevronDownIcon,
@@ -9,6 +9,7 @@ import {
   FileTextIcon,
   HistoryIcon,
   ListIcon,
+  Trash2Icon,
 } from 'lucide-react';
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -188,10 +189,14 @@ const VersionList = memo<{ workId: string }>(({ workId }) => {
 VersionList.displayName = 'VersionList';
 
 const WorkVersionHistoryCard = memo<{ work: WorkListItem }>(({ work }) => {
+  const { t } = useTranslation('chat');
   const [expanded, setExpanded] = useState(false);
   const [openDocument, openTaskDetail] = useChatStore((s) => [s.openDocument, s.openTaskDetail]);
   const ToggleIcon = expanded ? ChevronDownIcon : ChevronRightIcon;
   const label = work.resourceIdentifier ?? work.resourceId;
+  // The underlying task was deleted outside the tool path — the Work survives as
+  // an orphan rendered from its snapshot, and opening the (gone) task detail 404s.
+  const taskDeleted = work.type === 'task' && work.taskDeleted;
   // Display name comes straight from the resource snapshot (task name is live
   // from the tasks join). No synthesized fallback: a nameless resource shows
   // only its identifier label so data gaps stay visible.
@@ -216,7 +221,9 @@ const WorkVersionHistoryCard = memo<{ work: WorkListItem }>(({ work }) => {
         ? externalUrl
           ? () => window.open(externalUrl, '_blank', 'noopener,noreferrer')
           : undefined
-        : () => openTaskDetail(label);
+        : taskDeleted
+          ? undefined
+          : () => openTaskDetail(label);
 
   return (
     <Flexbox className={styles.workCard}>
@@ -243,6 +250,11 @@ const WorkVersionHistoryCard = memo<{ work: WorkListItem }>(({ work }) => {
         <Text className={styles.context} style={{ flexShrink: 0 }}>
           {label}
         </Text>
+        {taskDeleted && (
+          <Tag color={'warning'} icon={<Trash2Icon size={12} />} size={'small'}>
+            {t('workingPanel.works.taskDeleted')}
+          </Tag>
+        )}
         {title && (
           <Text
             ellipsis

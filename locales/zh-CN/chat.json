@@ -1393,6 +1393,7 @@
   "workingPanel.works.error": "产物加载失败",
   "workingPanel.works.role.created": "已创建",
   "workingPanel.works.role.updated": "已编辑",
+  "workingPanel.works.taskDeleted": "任务已删除",
   "workingPanel.works.title": "产物",
   "workingPanel.works.versionError": "版本加载失败",
   "workingPanel.works.viewMode.history": "版本历史",

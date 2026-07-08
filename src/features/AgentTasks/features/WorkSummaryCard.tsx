@@ -2,9 +2,9 @@
 
 import type { WorkSummaryItem } from '@lobechat/types';
 import { Github } from '@lobehub/icons';
-import { Flexbox, Text } from '@lobehub/ui';
+import { Flexbox, Tag, Text } from '@lobehub/ui';
 import { createStaticStyles, cx } from 'antd-style';
-import { ClipboardListIcon, FileTextIcon } from 'lucide-react';
+import { ClipboardListIcon, FileTextIcon, Trash2Icon } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -98,7 +98,11 @@ const WorkSummaryCard = memo<WorkSummaryCardProps>(({ className, item }) => {
   // Linear/github works registered from CLI results may carry no URL — those
   // cards have nothing to open, so drop the click affordance entirely.
   const externalUrl = isLinear ? item.linear.url : isGithub ? item.github.url : undefined;
-  const clickable = isDocument || (!isLinear && !isGithub) || !!externalUrl;
+  // The backing task was deleted outside the tool path: the Work lingers as an
+  // orphan rendered from its snapshot, and opening the gone task detail 404s, so
+  // strip the click affordance and surface a "task deleted" badge.
+  const taskDeleted = item.resourceType === 'task' && item.taskDeleted;
+  const clickable = (isDocument || (!isLinear && !isGithub) || !!externalUrl) && !taskDeleted;
   const handleOpen = () => {
     if (isDocument) {
       openDocument(item.document.id, item.event.metadata?.agentDocumentId);
@@ -126,9 +130,16 @@ const WorkSummaryCard = memo<WorkSummaryCardProps>(({ className, item }) => {
       </Flexbox>
       <Flexbox flex={1} gap={6} style={{ minWidth: 0 }}>
         <Flexbox horizontal align={'center'} gap={8} justify={'space-between'}>
-          <Text ellipsis className={styles.title}>
-            {title}
-          </Text>
+          <Flexbox horizontal align={'center'} gap={8} style={{ minWidth: 0 }}>
+            <Text ellipsis className={styles.title}>
+              {title}
+            </Text>
+            {taskDeleted && (
+              <Tag color={'warning'} icon={<Trash2Icon size={12} />} size={'small'}>
+                {t('workingPanel.works.taskDeleted')}
+              </Tag>
+            )}
+          </Flexbox>
           {cost && (
             <Text
               code

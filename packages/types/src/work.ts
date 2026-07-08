@@ -189,6 +189,14 @@ export interface TaskWorkListItem extends WorkItem {
     priority: number | null;
     status: TaskStatus | string | null;
   };
+  /**
+   * The live task row backing this Work no longer exists (deleted outside the
+   * tool-dispatch path, which deliberately orphans the Work). When true, the
+   * `task` fields fall back to the version snapshot and the UI renders the card
+   * as "task deleted". Derived from a `tasks` LEFT JOIN missing its row, not a
+   * persisted flag.
+   */
+  taskDeleted: boolean;
   type: 'task';
 }
 

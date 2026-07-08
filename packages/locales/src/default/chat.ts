@@ -1367,6 +1367,7 @@ export default {
   'workingPanel.works.error': 'Failed to load works',
   'workingPanel.works.role.created': 'Created',
   'workingPanel.works.role.updated': 'Updated',
+  'workingPanel.works.taskDeleted': 'Task deleted',
   'workingPanel.works.title': 'Works',
   'workingPanel.works.versionError': 'Failed to load versions',
   'workingPanel.works.viewMode.history': 'Version history',

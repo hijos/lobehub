@@ -1,6 +1,7 @@
 'use client';
 
-import { Button, Flexbox, Icon, Markdown, Text } from '@lobehub/ui';
+import { Flexbox, Icon, Markdown, Text } from '@lobehub/ui';
+import { Button } from '@lobehub/ui/base-ui';
 import { createStaticStyles, cssVar } from 'antd-style';
 import isEqual from 'fast-deep-equal';
 import { CircleAlert, CircleCheck, CircleSlash, SquareArrowOutUpRight } from 'lucide-react';

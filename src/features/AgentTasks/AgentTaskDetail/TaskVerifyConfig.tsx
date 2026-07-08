@@ -3,7 +3,6 @@
 import {
   ActionIcon,
   Block,
-  Button,
   type DropdownItem,
   DropdownMenu,
   Flexbox,
@@ -13,7 +12,7 @@ import {
   Text,
   TextArea,
 } from '@lobehub/ui';
-import { Select, Switch } from '@lobehub/ui/base-ui';
+import { Button, Select, Switch } from '@lobehub/ui/base-ui';
 import { App } from 'antd';
 import { createStaticStyles, cssVar } from 'antd-style';
 import {

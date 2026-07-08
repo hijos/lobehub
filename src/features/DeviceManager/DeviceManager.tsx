@@ -2,8 +2,8 @@
 
 import { isDesktop } from '@lobechat/const';
 import type { DeviceScope } from '@lobechat/types';
-import { Button, Checkbox, Flexbox, Icon, Skeleton, Text } from '@lobehub/ui';
-import { confirmModal } from '@lobehub/ui/base-ui';
+import { Checkbox, Flexbox, Icon, Skeleton, Text } from '@lobehub/ui';
+import { Button, confirmModal } from '@lobehub/ui/base-ui';
 import { createStaticStyles, cssVar } from 'antd-style';
 import {
   ChevronRightIcon,

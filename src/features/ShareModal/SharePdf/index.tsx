@@ -1,6 +1,7 @@
 import { type UIChatMessage } from '@lobechat/types';
 import { type FormItemProps } from '@lobehub/ui';
-import { Button, Flexbox, Form } from '@lobehub/ui';
+import { Flexbox, Form } from '@lobehub/ui';
+import { Button } from '@lobehub/ui/base-ui';
 import { App, Switch } from 'antd';
 import { cx } from 'antd-style';
 import { DownloadIcon, FileText } from 'lucide-react';

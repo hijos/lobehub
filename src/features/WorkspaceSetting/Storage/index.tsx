@@ -2,7 +2,8 @@
 
 import { BRANDING_NAME } from '@lobechat/business-const';
 import type { FormGroupItemType } from '@lobehub/ui';
-import { Button, Form, Icon } from '@lobehub/ui';
+import { Form, Icon } from '@lobehub/ui';
+import { Button } from '@lobehub/ui/base-ui';
 import { Switch } from 'antd';
 import { HardDriveDownload, HardDriveUpload } from 'lucide-react';
 import { memo } from 'react';

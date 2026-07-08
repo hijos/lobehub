@@ -2,8 +2,9 @@
 
 import { BRANDING_NAME } from '@lobechat/business-const';
 import { type IconProps } from '@lobehub/ui';
-import { Block, Button, Flexbox, Icon, Text } from '@lobehub/ui';
+import { Block, Flexbox, Icon, Text } from '@lobehub/ui';
 import { TypewriterEffect } from '@lobehub/ui/awesome';
+import { Button } from '@lobehub/ui/base-ui';
 import { LoadingDots } from '@lobehub/ui/chat';
 import { Steps, Switch } from 'antd';
 import { cssVar } from 'antd-style';

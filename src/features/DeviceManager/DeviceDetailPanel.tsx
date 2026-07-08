@@ -2,17 +2,8 @@
 
 import { isDesktop } from '@lobechat/const';
 import type { DeviceListItem } from '@lobechat/types';
-import {
-  ActionIcon,
-  Avatar,
-  Button,
-  Flexbox,
-  Icon,
-  Input,
-  SortableList,
-  Tag,
-  Text,
-} from '@lobehub/ui';
+import { ActionIcon, Avatar, Flexbox, Icon, Input, SortableList, Tag, Text } from '@lobehub/ui';
+import { Button } from '@lobehub/ui/base-ui';
 import { createStaticStyles, cssVar } from 'antd-style';
 import dayjs from 'dayjs';
 import { FolderOpenIcon, FolderPlusIcon, LockIcon, XIcon } from 'lucide-react';
@@ -37,7 +28,6 @@ const styles = createStaticStyles(({ css }) => ({
   `,
   dot: css`
     flex: none;
-
     width: 8px;
     height: 8px;
     border-radius: 50%;

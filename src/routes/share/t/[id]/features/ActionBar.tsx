@@ -1,4 +1,5 @@
-import { Avatar, Block, Button, Center, Flexbox, Text } from '@lobehub/ui';
+import { Avatar, Block, Center, Flexbox, Text } from '@lobehub/ui';
+import { Button } from '@lobehub/ui/base-ui';
 import { HandIcon } from 'lucide-react';
 import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -90,7 +91,7 @@ const ActionBar = memo<ActionBarProps>(({ data }) => {
         </Flexbox>
         <Flexbox horizontal align="center" gap={8}>
           <WorkspaceLink to={`/community/agent`}>
-            <Button shape={'round'} variant={'filled'}>
+            <Button shape={'round'} type={'fill'}>
               {t('sharePage.actions.findMord')}
             </Button>
           </WorkspaceLink>

@@ -1,6 +1,7 @@
 'use client';
 
-import { Button, Icon } from '@lobehub/ui';
+import { Icon } from '@lobehub/ui';
+import { Button } from '@lobehub/ui/base-ui';
 import { MonitorUpIcon } from 'lucide-react';
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';

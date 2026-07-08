@@ -1,7 +1,8 @@
 'use client';
 
 import { type FormGroupItemType } from '@lobehub/ui';
-import { Avatar, Button, Center, Empty, Flexbox, Form, Tag, Tooltip } from '@lobehub/ui';
+import { Avatar, Center, Empty, Flexbox, Form, Tag, Tooltip } from '@lobehub/ui';
+import { Button } from '@lobehub/ui/base-ui';
 import { Space, Switch } from 'antd';
 import isEqual from 'fast-deep-equal';
 import { BlocksIcon, LucideTrash2, Store } from 'lucide-react';

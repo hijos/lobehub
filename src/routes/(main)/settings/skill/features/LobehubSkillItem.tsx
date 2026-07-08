@@ -1,16 +1,8 @@
 'use client';
 
 import { type LobehubSkillProviderType } from '@lobechat/const';
-import {
-  Avatar,
-  Button as LobeButton,
-  Center,
-  DropdownMenu,
-  Flexbox,
-  Icon,
-  Tooltip,
-} from '@lobehub/ui';
-import { confirmModal } from '@lobehub/ui/base-ui';
+import { Avatar, Center, DropdownMenu, Flexbox, Icon, Tooltip } from '@lobehub/ui';
+import { Button as LobeButton, confirmModal } from '@lobehub/ui/base-ui';
 import { Button } from 'antd';
 import { cssVar } from 'antd-style';
 import {

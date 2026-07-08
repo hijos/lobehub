@@ -1,4 +1,4 @@
-import { normalizeListTasksParams, TaskApiName, TaskIdentifier } from '@lobechat/builtin-tool-task';
+import { normalizeListTasksParams, TaskIdentifier } from '@lobechat/builtin-tool-task';
 import type { LobeChatDatabase } from '@lobechat/database';
 import type { TaskCreatedItem } from '@lobechat/prompts';
 import {
@@ -17,7 +17,6 @@ import { eq } from 'drizzle-orm';
 
 import { AgentModel } from '@/database/models/agent';
 import { TaskModel } from '@/database/models/task';
-import { WorkModel } from '@/database/models/work';
 import { WorkspaceModel } from '@/database/models/workspace';
 import { tasks } from '@/database/schemas';
 import { appEnv } from '@/envs/app';
@@ -71,7 +70,6 @@ export interface TaskRuntimeDeps {
   // Source tool result message id, when the runtime already has one.
   toolMessageId?: string;
   topicId?: string | null;
-  workModel?: WorkModel;
 }
 
 export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
@@ -82,9 +80,7 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
     rootOperationId,
     scope,
     taskId,
-    threadId,
     toolCallId,
-    toolMessageId,
     topicId,
   } = deps;
   // Models are read through `deps` (not destructured) so callers can swap them
@@ -93,44 +89,6 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
   const taskModel = () => deps.taskModel;
   const taskService = () => deps.taskService;
   const taskCaller = () => deps.taskCaller;
-  const workModel = () => deps.workModel;
-
-  const registerTaskWork = async (params: {
-    role: 'created' | 'updated';
-    source: string;
-    taskId?: string;
-    taskIdentifier?: string;
-  }) => {
-    const model = workModel();
-    if (!model) return;
-    if (!params.taskId && !params.taskIdentifier) return;
-
-    try {
-      await model.registerTask({
-        actorAgentId: agentId,
-        role: params.role,
-        rootOperationId: rootOperationId ?? operationId,
-        source: params.source,
-        sourceMessageId: toolMessageId,
-        sourceToolCallId: toolCallId,
-        taskId: params.taskId,
-        taskIdentifier: params.taskIdentifier,
-        threadId,
-        topicId,
-      });
-    } catch (error) {
-      console.error(
-        '[TaskRuntime] register task work failed:',
-        {
-          rootOperationId: rootOperationId ?? operationId,
-          sourceToolCallId: toolCallId,
-          taskId: params.taskId,
-          taskIdentifier: params.taskIdentifier,
-        },
-        error,
-      );
-    }
-  };
 
   // Base URL for task deep-links embedded in tool results. These results can be
   // pushed to IM / bot channels and mobile, so the link must be ABSOLUTE — and
@@ -256,19 +214,12 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
 
     createTask: async (args: CreateTaskArgs) => {
       const result = await createTaskImpl(args);
-      if (result.success) {
-        await registerTaskWork({
-          role: 'created',
-          source: TaskApiName.createTask,
-          taskId: result.taskId,
-          taskIdentifier: result.identifier,
-        });
-      }
       const { identifier, taskId: createdTaskId, ...rest } = result;
       // Surface the created task identifier as plugin state (mirrors the client
       // executor's `{ identifier, success }`) so the inline render can link to
-      // the task detail. Without this the tool message persists no state and the
-      // card has nothing to open.
+      // the task detail, AND so the dispatch-layer Work registration can read the
+      // created task identity from `result.state`. Without this the tool message
+      // persists no state and the card has nothing to open.
       return identifier
         ? { ...rest, state: { identifier, success: rest.success, taskId: createdTaskId } }
         : rest;
@@ -281,19 +232,10 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
       }
 
       const results: TaskCreatedItem[] = [];
-      const registrations: Parameters<typeof registerTaskWork>[0][] = [];
 
       for (const item of items) {
         try {
           const result = await createTaskImpl(item);
-          if (result.success) {
-            registrations.push({
-              role: 'created',
-              source: TaskApiName.createTasks,
-              taskId: result.taskId,
-              taskIdentifier: result.identifier,
-            });
-          }
           results.push({
             error: result.success ? undefined : result.content,
             identifier: result.identifier,
@@ -306,19 +248,17 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
         }
       }
 
-      // Work registration is best-effort bookkeeping (errors are swallowed
-      // inside registerTaskWork), so run all registrations concurrently instead
-      // of paying sequential DB round trips per created task.
-      if (registrations.length > 0) {
-        await Promise.all(registrations.map((registration) => registerTaskWork(registration)));
-      }
-
-      const failed = results.filter((r) => !r.success).length;
+      const succeeded = results.filter((r) => r.success).length;
+      const failed = results.length - succeeded;
 
       return {
         // Absolute, workspace-scoped links so the summary stays clickable when
         // pushed to IM / mobile.
         content: formatTasksCreated(results, await taskLinkBaseUrl()),
+        // State parity with the client executor (`{ failed, results, succeeded }`)
+        // so the dispatch-layer Work registration can read per-item identity +
+        // success from `result.state.results` for partial-failure batches.
+        state: { failed, results, succeeded },
         success: failed === 0,
       };
     },
@@ -457,13 +397,6 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
       const firstDepError = depErrors.find((e) => e);
       if (firstDepError) return { content: firstDepError, success: false };
 
-      await registerTaskWork({
-        role: 'updated',
-        source: TaskApiName.editTask,
-        taskId: task.id,
-        taskIdentifier: task.identifier,
-      });
-
       return { content: formatTaskEdited(task.identifier, changes), success: true };
     },
 
@@ -573,12 +506,6 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
       }
 
       await Promise.all(ops);
-      await registerTaskWork({
-        role: 'updated',
-        source: TaskApiName.setTaskSchedule,
-        taskId: task.id,
-        taskIdentifier: task.identifier,
-      });
 
       return { content: formatTaskEdited(task.identifier, changes), success: true };
     },
@@ -659,12 +586,6 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
       }
 
       await taskCaller().updateVerifyConfig({ id: task.id, verify });
-      await registerTaskWork({
-        role: 'updated',
-        source: TaskApiName.setTaskVerify,
-        taskId: task.id,
-        taskIdentifier: task.identifier,
-      });
 
       return { content: formatTaskEdited(task.identifier, changes), success: true };
     },
@@ -861,7 +782,6 @@ export const taskRuntime: ServerRuntimeRegistration = {
       taskModel: new TaskModel(db, userId),
       taskService: new TaskService(db, userId),
       taskCaller: taskRouter.createCaller({ userId }),
-      workModel: new WorkModel(db, userId),
     } as TaskRuntimeDeps;
 
     let resolved = false;
@@ -877,7 +797,6 @@ export const taskRuntime: ServerRuntimeRegistration = {
       deps.taskModel = new TaskModel(db, userId, wsId);
       deps.taskService = new TaskService(db, userId, wsId);
       deps.taskCaller = taskRouter.createCaller({ userId, workspaceId: wsId });
-      deps.workModel = new WorkModel(db, userId, wsId);
     };
 
     const baseRuntime = createTaskRuntime(deps);

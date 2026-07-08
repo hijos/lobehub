@@ -94,22 +94,18 @@ describe('TaskExecutor.onAfterCall — portal auto-open', () => {
     expect(mocks.openTaskDetail).not.toHaveBeenCalled();
   });
 
-  it('registers Work version after setting task verify config', async () => {
+  // Note: Work registration is no longer done inside the executor. It now runs
+  // at the tool-execution dispatch layer (`invokeExecutor`), driven by the
+  // manifest `work` config — covered by the dispatch-layer + shared-extractor
+  // tests instead.
+  it('applies verify config and refreshes the task detail', async () => {
     const result = await taskExecutor.setTaskVerify(
       {
         enabled: true,
         identifier: 'TASK-1',
         requirement: 'Ship tested output',
       },
-      {
-        agentId: 'agent-1',
-        operationId: 'op-child',
-        rootOperationId: 'op-root',
-        threadId: 'thread-1',
-        toolCallId: 'tool-call-1',
-        toolMessageId: 'msg-tool-1',
-        topicId: 'topic-1',
-      } as any,
+      { agentId: 'agent-1' } as any,
     );
 
     expect(result.success).toBe(true);
@@ -121,21 +117,8 @@ describe('TaskExecutor.onAfterCall — portal auto-open', () => {
       },
     });
     expect(mocks.internalRefreshTaskDetail).toHaveBeenCalledWith('TASK-1');
-    expect(mocks.registerTask).toHaveBeenCalledWith(
-      expect.objectContaining({
-        actorAgentId: 'agent-1',
-        role: 'updated',
-        rootOperationId: 'op-root',
-        source: TaskApiName.setTaskVerify,
-        sourceMessageId: 'msg-tool-1',
-        sourceToolCallId: 'tool-call-1',
-        taskIdentifier: 'TASK-1',
-        threadId: 'thread-1',
-        topicId: 'topic-1',
-      }),
-    );
-    expect(mocks.refreshConversation).toHaveBeenCalledWith('topic-1', 'thread-1');
-    expect(mocks.refreshRootOperation).toHaveBeenCalledWith('op-root');
-    expect(mocks.refreshVersions).toHaveBeenCalledWith('work-1');
+    // The executor itself no longer registers Work or touches the work caches.
+    expect(mocks.registerTask).not.toHaveBeenCalled();
+    expect(mocks.refreshVersions).not.toHaveBeenCalled();
   });
 });

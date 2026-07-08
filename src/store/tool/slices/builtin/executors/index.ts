@@ -32,6 +32,7 @@ import { topicReferenceExecutor } from './lobe-topic-reference';
 import { userInteractionExecutor } from './lobe-user-interaction';
 import { webBrowsing } from './lobe-web-browsing';
 import { webOnboardingExecutor } from './lobe-web-onboarding';
+import { registerBuiltinToolWork } from './workRegistration';
 
 /**
  * Registry structure: Map<identifier, executor instance>
@@ -120,7 +121,14 @@ export const invokeExecutor = async (
     };
   }
 
-  return executor.invoke(apiName, params, ctx);
+  const result = await executor.invoke(apiName, params, ctx);
+
+  // Manifest-driven Work registration (best-effort; a no-op unless the API
+  // declares a `work` config). Inline so the version lands and the work SWR
+  // caches refresh before the caller publishes `tool_end`.
+  await registerBuiltinToolWork(identifier, apiName, params, ctx, result);
+
+  return result;
 };
 
 /**

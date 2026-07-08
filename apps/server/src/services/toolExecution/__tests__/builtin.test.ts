@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   apiHandler: vi.fn(),
   executeLobehubSkill: vi.fn(),
   handleSkillToolResult: vi.fn(),
+  registerTask: vi.fn(),
 }));
 const mockApiHandler = mocks.apiHandler;
 
@@ -19,6 +20,7 @@ vi.mock('../serverRuntimes', () => ({
 vi.mock('@/database/models/work', () => ({
   WorkModel: vi.fn().mockImplementation(() => ({
     handleSkillToolResult: mocks.handleSkillToolResult,
+    registerTask: mocks.registerTask,
   })),
 }));
 vi.mock('@/server/services/composio', () => ({
@@ -38,6 +40,17 @@ vi.mock('@lobechat/builtin-tools', () => ({
     {
       identifier: 'lobe-notebook',
       manifest: { api: [{ name: 'createDocument' }, { name: 'listDocuments' }] },
+    },
+    {
+      identifier: 'lobe-task',
+      manifest: {
+        api: [
+          { name: 'createTask', work: { action: 'create', resourceType: 'task' } },
+          { name: 'createTasks', work: { action: 'create', resourceType: 'task' } },
+          { name: 'editTask', work: { action: 'update', resourceType: 'task' } },
+          { name: 'listTasks' },
+        ],
+      },
     },
   ],
 }));
@@ -62,6 +75,7 @@ describe('BuiltinToolsExecutor truncated arguments', () => {
     mockApiHandler.mockReset();
     mocks.executeLobehubSkill.mockReset();
     mocks.handleSkillToolResult.mockReset();
+    mocks.registerTask.mockReset();
   });
 
   it('short-circuits with TRUNCATED_ARGUMENTS when JSON is cut mid-object', async () => {
@@ -316,5 +330,130 @@ describe('BuiltinToolsExecutor truncated arguments', () => {
 
     expect(result.success).toBe(true);
     expect(mocks.handleSkillToolResult).not.toHaveBeenCalled();
+  });
+});
+
+describe('BuiltinToolsExecutor manifest-driven Work registration', () => {
+  const executor = new BuiltinToolsExecutor({} as any, 'user-1');
+
+  const taskContext: ToolExecutionContext = {
+    agentId: 'agent-1',
+    operationId: 'op-child',
+    rootOperationId: 'op-root',
+    serverDB: {} as NonNullable<ToolExecutionContext['serverDB']>,
+    threadId: 'thread-1',
+    toolCallId: 'tool-call-task',
+    toolManifestMap: {},
+    toolMessageId: 'msg-tool-task',
+    topicId: 'topic-1',
+    userId: 'user-1',
+    workspaceId: 'workspace-1',
+  };
+
+  const taskPayload = (apiName: string, argsStr = '{}'): ChatToolPayload => ({
+    apiName,
+    arguments: argsStr,
+    id: 'tool-call-task',
+    identifier: 'lobe-task',
+    type: 'default' as any,
+  });
+
+  beforeEach(() => {
+    mocks.registerTask.mockReset().mockResolvedValue({ id: 'work-1' });
+  });
+
+  it('registers a task Work after a successful createTask, reading identity from state', async () => {
+    const { getServerRuntime } = await import('../serverRuntimes');
+    vi.mocked(getServerRuntime).mockResolvedValueOnce({
+      createTask: vi.fn().mockResolvedValue({
+        content: 'ok',
+        state: { identifier: 'T-1', success: true, taskId: 'task_1' },
+        success: true,
+      }),
+    } as any);
+
+    const result = await executor.execute(
+      taskPayload('createTask', '{"name":"A","instruction":"do"}'),
+      taskContext,
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.registerTask).toHaveBeenCalledWith({
+      actorAgentId: 'agent-1',
+      role: 'created',
+      rootOperationId: 'op-root',
+      source: 'createTask',
+      sourceMessageId: 'msg-tool-task',
+      sourceToolCallId: 'tool-call-task',
+      taskId: 'task_1',
+      taskIdentifier: 'T-1',
+      threadId: 'thread-1',
+      topicId: 'topic-1',
+    });
+  });
+
+  it('registers only the succeeded items of a partial-failure batch', async () => {
+    const { getServerRuntime } = await import('../serverRuntimes');
+    vi.mocked(getServerRuntime).mockResolvedValueOnce({
+      createTasks: vi.fn().mockResolvedValue({
+        content: 'ok',
+        state: {
+          failed: 1,
+          results: [
+            { identifier: 'T-A', name: 'A', success: true },
+            { error: 'boom', name: 'B', success: false },
+          ],
+          succeeded: 1,
+        },
+        success: false,
+      }),
+    } as any);
+
+    await executor.execute(taskPayload('createTasks', '{"tasks":[]}'), taskContext);
+
+    expect(mocks.registerTask).toHaveBeenCalledTimes(1);
+    expect(mocks.registerTask).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'created', source: 'createTasks', taskIdentifier: 'T-A' }),
+    );
+  });
+
+  it('does not register for an API without a work config', async () => {
+    const { getServerRuntime } = await import('../serverRuntimes');
+    vi.mocked(getServerRuntime).mockResolvedValueOnce({
+      listTasks: vi.fn().mockResolvedValue({ content: 'ok', success: true }),
+    } as any);
+
+    await executor.execute(taskPayload('listTasks'), taskContext);
+
+    expect(mocks.registerTask).not.toHaveBeenCalled();
+  });
+
+  it('does not register when the update failed (no extractable target)', async () => {
+    const { getServerRuntime } = await import('../serverRuntimes');
+    vi.mocked(getServerRuntime).mockResolvedValueOnce({
+      editTask: vi.fn().mockResolvedValue({ content: 'Task not found', success: false }),
+    } as any);
+
+    await executor.execute(taskPayload('editTask', '{"identifier":"T-404"}'), taskContext);
+
+    expect(mocks.registerTask).not.toHaveBeenCalled();
+  });
+
+  it('never fails the tool result when registration throws', async () => {
+    const { getServerRuntime } = await import('../serverRuntimes');
+    vi.mocked(getServerRuntime).mockResolvedValueOnce({
+      editTask: vi.fn().mockResolvedValue({ content: 'edited', success: true }),
+    } as any);
+    mocks.registerTask.mockRejectedValueOnce(new Error('db down'));
+
+    const result = await executor.execute(
+      taskPayload('editTask', '{"identifier":"T-1","name":"Edited"}'),
+      taskContext,
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.registerTask).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'updated', source: 'editTask', taskIdentifier: 'T-1' }),
+    );
   });
 });

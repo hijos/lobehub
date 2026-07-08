@@ -10,6 +10,7 @@ import { MarketService } from '@/server/services/market';
 
 import { getServerRuntime, hasServerRuntime } from './serverRuntimes';
 import { type IToolExecutor, type ToolExecutionContext, type ToolExecutionResult } from './types';
+import { registerBuiltinToolWork } from './workRegistration';
 
 const log = debug('lobe-server:builtin-tools-executor');
 
@@ -186,7 +187,23 @@ export class BuiltinToolsExecutor implements IToolExecutor {
     }
 
     try {
-      return await runtime[apiName](args, context);
+      const result = await runtime[apiName](args, context);
+
+      // Manifest-driven Work registration: inline (before returning the result)
+      // so the Work version is durable before `tool_end` publishes, matching the
+      // old in-runtime registration ordering. No-op unless the API declares a
+      // `work` config; best-effort (never fails the tool).
+      await registerBuiltinToolWork({
+        apiName,
+        args,
+        context,
+        db: this.db,
+        identifier,
+        result,
+        userId: this.userId,
+      });
+
+      return result;
     } catch (e) {
       const error = e as Error;
       console.error('Error executing builtin tool %s:%s: %O', identifier, apiName, error);

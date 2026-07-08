@@ -87,72 +87,6 @@ const refreshConversationWorks = async (ctx?: BuiltinToolContext) => {
   });
 };
 
-interface TaskWorkTarget {
-  taskId?: string;
-  taskIdentifier?: string;
-}
-
-interface RegisterTaskWorkOptions extends TaskWorkTarget {
-  ctx?: BuiltinToolContext;
-  role: 'created' | 'updated';
-  source: string;
-}
-
-/**
- * Registers Works for one or more tasks, then refreshes the shared work caches
- * ONCE for the whole batch. `createTasks` can create dozens of tasks — issuing
- * the 3 cache refreshes per item would turn into a request storm while the
- * caches only need the final state.
- */
-const registerTaskWorks = async ({
-  ctx,
-  items,
-  role,
-  source,
-}: {
-  ctx?: BuiltinToolContext;
-  items: TaskWorkTarget[];
-  role: 'created' | 'updated';
-  source: string;
-}) => {
-  const targets = items.filter((item) => item.taskId || item.taskIdentifier);
-  if (targets.length === 0) return;
-
-  const rootOperationId = ctx?.rootOperationId ?? ctx?.operationId;
-  const works = await Promise.all(
-    targets.map((item) =>
-      workService
-        .registerTask({
-          actorAgentId: ctx?.agentId,
-          role,
-          rootOperationId,
-          source,
-          sourceMessageId: ctx?.toolMessageId,
-          sourceToolCallId: ctx?.toolCallId,
-          taskId: item.taskId,
-          taskIdentifier: item.taskIdentifier,
-          threadId: ctx?.threadId,
-          topicId: ctx?.topicId,
-        })
-        .catch((error) => {
-          log('[TaskExecutor] register task work failed: %O', error);
-          return undefined;
-        }),
-    ),
-  );
-
-  await Promise.all([
-    workService.refreshConversation(ctx?.topicId, ctx?.threadId),
-    workService.refreshRootOperation(rootOperationId),
-    ...works.filter(Boolean).map((work) => workService.refreshVersions(work?.id)),
-  ]).catch((error) => {
-    log('[TaskExecutor] refresh task works failed: %O', error);
-  });
-};
-
-const registerTaskWork = async ({ ctx, role, source, ...target }: RegisterTaskWorkOptions) =>
-  registerTaskWorks({ ctx, items: [target], role, source });
-
 class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
   readonly identifier = TaskIdentifier;
   protected readonly apiEnum = TaskApiName;
@@ -248,8 +182,10 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
   };
 
   /**
-   * Creates the task WITHOUT registering its Work — public callers decide:
-   * `createTask` registers per item, `createTasks` batches after its loop.
+   * Shared single-task create used by both `createTask` and the `createTasks`
+   * batch loop. Returns the raw {@link BuiltinToolResult}; Work registration is
+   * driven by the manifest `work` config at the tool-execution dispatch layer
+   * (`invokeExecutor`), not here.
    */
   #createTask = async (
     params: {
@@ -261,7 +197,7 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
       sortOrder?: number;
     },
     ctx?: BuiltinToolContext,
-  ): Promise<{ result: BuiltinToolResult; work?: TaskWorkTarget }> => {
+  ): Promise<BuiltinToolResult> => {
     try {
       log('[TaskExecutor] createTask - params:', params);
       const parentIdentifier = params.parentIdentifier?.trim() || undefined;
@@ -278,41 +214,36 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
 
       if (!task) {
         return {
-          result: {
-            content: 'Failed to create task',
-            error: { message: 'No data returned', type: 'CreateFailed' },
-            success: false,
-          },
+          content: 'Failed to create task',
+          error: { message: 'No data returned', type: 'CreateFailed' },
+          success: false,
         };
       }
 
       return {
-        result: {
-          content: formatTaskCreated({
-            baseUrl: taskLinkBaseUrl(),
-            identifier: task.identifier,
-            instruction: params.instruction,
-            name: task.name,
-            parentLabel: parentIdentifier,
-            priority: task.priority,
-            status: task.status,
-          }),
-          // Structure the freshly-created task into `state` so the renderer and
-          // the Debug "skill state" panel have real data without re-deriving from
-          // `args` (the only other source after a conversation reopen).
-          state: {
-            description: task.description,
-            identifier: task.identifier,
-            name: task.name,
-            parentIdentifier,
-            priority: task.priority,
-            status: task.status as TaskStatus,
-            success: true,
-            taskId: task.id,
-          },
+        content: formatTaskCreated({
+          baseUrl: taskLinkBaseUrl(),
+          identifier: task.identifier,
+          instruction: params.instruction,
+          name: task.name,
+          parentLabel: parentIdentifier,
+          priority: task.priority,
+          status: task.status,
+        }),
+        // Structure the freshly-created task into `state` so the renderer and
+        // the Debug "skill state" panel have real data without re-deriving from
+        // `args` (the only other source after a conversation reopen).
+        state: {
+          description: task.description,
+          identifier: task.identifier,
+          name: task.name,
+          parentIdentifier,
+          priority: task.priority,
+          status: task.status as TaskStatus,
           success: true,
+          taskId: task.id,
         },
-        work: { taskId: task.id, taskIdentifier: task.identifier },
+        success: true,
       };
     } catch (error) {
       log('[TaskExecutor] createTask - error:', error);
@@ -321,11 +252,9 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
         ? message
         : `Failed to create task: ${message}`;
       return {
-        result: {
-          content,
-          error: { message, type: 'CreateTaskFailed' },
-          success: false,
-        },
+        content,
+        error: { message, type: 'CreateTaskFailed' },
+        success: false,
       };
     }
   };
@@ -340,14 +269,7 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
       sortOrder?: number;
     },
     ctx?: BuiltinToolContext,
-    source: string = TaskApiName.createTask,
-  ): Promise<BuiltinToolResult> => {
-    const { result, work } = await this.#createTask(params, ctx);
-    if (work) {
-      await registerTaskWork({ ctx, role: 'created', source, ...work });
-    }
-    return result;
-  };
+  ): Promise<BuiltinToolResult> => this.#createTask(params, ctx);
 
   createTasks = async (
     params: { tasks: CreateTaskParams[] },
@@ -365,27 +287,18 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
     }
 
     const results: CreateTasksItemResult[] = [];
-    const createdWorks: TaskWorkTarget[] = [];
 
     for (const item of items) {
-      const { result, work } = await this.#createTask(item, ctx);
+      const result = await this.#createTask(item, ctx);
       const success = result.success === true;
       const error = success
         ? undefined
         : result.error?.message ||
           (typeof result.content === 'string' ? result.content : 'Unknown error');
+      const identifier = (result.state as { identifier?: string } | undefined)?.identifier;
 
-      if (work) createdWorks.push(work);
-
-      results.push({ error, identifier: work?.taskIdentifier, name: item.name, success });
+      results.push({ error, identifier, name: item.name, success });
     }
-
-    await registerTaskWorks({
-      ctx,
-      items: createdWorks,
-      role: 'created',
-      source: TaskApiName.createTasks,
-    });
 
     const succeeded = results.filter((r) => r.success).length;
     const failed = results.length - succeeded;
@@ -464,7 +377,7 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
       priority?: number;
       removeDependencies?: string[];
     },
-    ctx?: BuiltinToolContext,
+    _ctx?: BuiltinToolContext,
   ): Promise<BuiltinToolResult> => {
     try {
       log('[TaskExecutor] editTask - params:', params);
@@ -530,12 +443,6 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
       }
 
       await Promise.all(ops);
-      await registerTaskWork({
-        ctx,
-        role: 'updated',
-        source: TaskApiName.editTask,
-        taskIdentifier: identifier,
-      });
 
       return {
         content: formatTaskEdited(identifier, changes),
@@ -562,7 +469,7 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
       schedulePattern?: string | null;
       scheduleTimezone?: string | null;
     },
-    ctx?: BuiltinToolContext,
+    _ctx?: BuiltinToolContext,
   ): Promise<BuiltinToolResult> => {
     try {
       log('[TaskExecutor] setTaskSchedule - params:', params);
@@ -643,12 +550,6 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
 
       await Promise.all(ops);
       await store.internal_refreshTaskDetail(identifier);
-      await registerTaskWork({
-        ctx,
-        role: 'updated',
-        source: TaskApiName.setTaskSchedule,
-        taskIdentifier: identifier,
-      });
 
       return {
         content: formatTaskEdited(identifier, changes),
@@ -676,7 +577,7 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
       verifyCriteriaIds?: string[] | null;
       verifyRubricId?: string | null;
     },
-    ctx?: BuiltinToolContext,
+    _ctx?: BuiltinToolContext,
   ): Promise<BuiltinToolResult> => {
     try {
       log('[TaskExecutor] setTaskVerify - params:', params);
@@ -753,12 +654,6 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
 
       await taskService.updateVerifyConfig({ id: identifier, verify });
       await getTaskStoreState().internal_refreshTaskDetail(identifier);
-      await registerTaskWork({
-        ctx,
-        role: 'updated',
-        source: TaskApiName.setTaskVerify,
-        taskIdentifier: identifier,
-      });
 
       return {
         content: formatTaskEdited(identifier, changes),

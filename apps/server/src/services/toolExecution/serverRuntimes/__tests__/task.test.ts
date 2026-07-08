@@ -192,11 +192,8 @@ describe('createTaskRuntime', () => {
       expect(result.content).toContain('[T-1](https://app.lobehub.com/acme/task/T-1)');
     });
 
-    it('registers created task as a work version with tool context', async () => {
+    it('surfaces the created task identity in state (the dispatch-layer registration source)', async () => {
       const deps = makeDeps();
-      const workModel = {
-        registerTask: vi.fn().mockResolvedValue({ id: 'work-1' }),
-      };
 
       const runtime = createTaskRuntime({
         agentModel: deps.agentModel as any,
@@ -210,25 +207,18 @@ describe('createTaskRuntime', () => {
         toolCallId: 'tool-call-1',
         toolMessageId: 'msg-tool',
         topicId: 'topic-1',
-        workModel: workModel as any,
       });
 
-      await runtime.createTask({
+      const result = await runtime.createTask({
         instruction: 'Do something',
         name: 'Test',
       });
 
-      expect(workModel.registerTask).toHaveBeenCalledWith({
-        actorAgentId: 'agt-xyz',
-        role: 'created',
-        rootOperationId: 'op-1',
-        source: 'createTask',
-        sourceMessageId: 'msg-tool',
-        sourceToolCallId: 'tool-call-1',
-        taskId: 'task-1',
-        taskIdentifier: 'T-1',
-        threadId: 'thread-1',
-        topicId: 'topic-1',
+      // Work registration now happens at the tool-execution dispatch layer, which
+      // reads the created task's identity from `result.state`.
+      expect(result.success).toBe(true);
+      expect(result).toMatchObject({
+        state: { identifier: 'T-1', success: true, taskId: 'task-1' },
       });
     });
 
@@ -486,11 +476,8 @@ describe('createTaskRuntime', () => {
       expect(result.content).toContain('parent cleared');
     });
 
-    it('registers edited task as a new work version', async () => {
+    it('applies an edit and succeeds (identity flows to dispatch-layer registration via args)', async () => {
       const deps = makeDeps();
-      const workModel = {
-        registerTask: vi.fn().mockResolvedValue({ id: 'work-1' }),
-      };
 
       const runtime = createTaskRuntime({
         agentModel: deps.agentModel as any,
@@ -499,7 +486,6 @@ describe('createTaskRuntime', () => {
         taskModel: deps.taskModel as any,
         taskService: deps.taskService as any,
         toolCallId: 'tool-call-edit',
-        workModel: workModel as any,
       });
 
       const result = await runtime.editTask({
@@ -508,22 +494,12 @@ describe('createTaskRuntime', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(workModel.registerTask).toHaveBeenCalledWith(
-        expect.objectContaining({
-          role: 'updated',
-          source: 'editTask',
-          sourceToolCallId: 'tool-call-edit',
-          taskId: 'task-1',
-          taskIdentifier: 'T-1',
-        }),
-      );
+      expect(result.content).toContain('name → "Edited"');
+      expect(deps.taskCaller.update).toHaveBeenCalledWith({ id: 'task-1', name: 'Edited' });
     });
 
-    it('returns failure without registering a work version when no fields are provided', async () => {
+    it('returns failure when no fields are provided', async () => {
       const deps = makeDeps();
-      const workModel = {
-        registerTask: vi.fn().mockResolvedValue({ id: 'work-1' }),
-      };
 
       const runtime = createTaskRuntime({
         agentModel: deps.agentModel as any,
@@ -531,7 +507,6 @@ describe('createTaskRuntime', () => {
         taskCaller: deps.taskCaller,
         taskModel: deps.taskModel as any,
         taskService: deps.taskService as any,
-        workModel: workModel as any,
       });
 
       const result = await runtime.editTask({ identifier: 'T-1' });
@@ -539,7 +514,6 @@ describe('createTaskRuntime', () => {
       expect(result.success).toBe(false);
       expect(result.content).toBe('No fields provided; nothing to update.');
       expect(deps.taskCaller.update).not.toHaveBeenCalled();
-      expect(workModel.registerTask).not.toHaveBeenCalled();
     });
   });
 
@@ -589,16 +563,14 @@ describe('createTaskRuntime', () => {
       };
     };
 
-    it('creates each task and aggregates a header line + per-item summary', async () => {
+    it('creates each task and aggregates a header line + per-item summary + state', async () => {
       const deps = makeDeps();
-      const workModel = { registerTask: vi.fn().mockResolvedValue({ id: 'work-1' }) };
       const runtime = createTaskRuntime({
         agentModel: deps.agentModel as any,
         agentId: 'agt-x',
         taskCaller: deps.taskCaller,
         taskModel: deps.taskModel as any,
         taskService: deps.taskService as any,
-        workModel: workModel as any,
       });
 
       const result = await runtime.createTasks({
@@ -617,10 +589,16 @@ describe('createTaskRuntime', () => {
       expect(result.content).toContain('[T-B](https://app.lobehub.com/task/T-B)');
       expect(result.content).toContain('T-A');
       expect(result.content).toContain('T-B');
-      expect(workModel.registerTask).toHaveBeenCalledTimes(2);
-      expect(workModel.registerTask).toHaveBeenCalledWith(
-        expect.objectContaining({ role: 'created', source: 'createTasks', taskId: 'db-A' }),
-      );
+      // State parity with the client executor: the dispatch-layer registration
+      // reads per-item identity + success from `state.results`.
+      expect(result.state).toEqual({
+        failed: 0,
+        results: [
+          { error: undefined, identifier: 'T-A', name: 'A', success: true },
+          { error: undefined, identifier: 'T-B', name: 'B', success: true },
+        ],
+        succeeded: 2,
+      });
     });
 
     it('continues past per-item failures and reports them in the summary', async () => {
@@ -673,7 +651,7 @@ describe('createTaskRuntime', () => {
   });
 
   describe('setTaskSchedule / setTaskVerify / updateTaskStatus', () => {
-    it('registers schedule changes as a new work version', async () => {
+    it('applies schedule changes and succeeds', async () => {
       const taskCaller = {
         update: vi.fn().mockResolvedValue({}),
         updateConfig: vi.fn().mockResolvedValue({}),
@@ -681,14 +659,12 @@ describe('createTaskRuntime', () => {
       const taskModel = {
         resolve: vi.fn().mockResolvedValue({ id: 'task-1', identifier: 'T-1' }),
       };
-      const workModel = { registerTask: vi.fn().mockResolvedValue({ id: 'work-1' }) };
       const runtime = createTaskRuntime({
         agentModel: { existsById: vi.fn() } as any,
         taskCaller: taskCaller as any,
         taskModel: taskModel as any,
         taskService: {} as any,
         toolCallId: 'tool-call-schedule',
-        workModel: workModel as any,
       });
 
       const result = await runtime.setTaskSchedule({
@@ -698,32 +674,24 @@ describe('createTaskRuntime', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(workModel.registerTask).toHaveBeenCalledWith(
-        expect.objectContaining({
-          role: 'updated',
-          source: 'setTaskSchedule',
-          sourceToolCallId: 'tool-call-schedule',
-          taskId: 'task-1',
-          taskIdentifier: 'T-1',
-        }),
+      expect(taskCaller.update).toHaveBeenCalledWith(
+        expect.objectContaining({ automationMode: 'schedule', id: 'task-1' }),
       );
     });
 
-    it('registers verify config changes as a new work version', async () => {
+    it('applies verify config changes and succeeds', async () => {
       const taskCaller = {
         updateVerifyConfig: vi.fn().mockResolvedValue({}),
       };
       const taskModel = {
         resolve: vi.fn().mockResolvedValue({ id: 'task-1', identifier: 'T-1' }),
       };
-      const workModel = { registerTask: vi.fn().mockResolvedValue({ id: 'work-1' }) };
       const runtime = createTaskRuntime({
         agentModel: { existsById: vi.fn() } as any,
         taskCaller: taskCaller as any,
         taskModel: taskModel as any,
         taskService: {} as any,
         toolCallId: 'tool-call-verify',
-        workModel: workModel as any,
       });
 
       const result = await runtime.setTaskVerify({
@@ -740,28 +708,17 @@ describe('createTaskRuntime', () => {
           requirement: 'The output must include a working demo.',
         },
       });
-      expect(workModel.registerTask).toHaveBeenCalledWith(
-        expect.objectContaining({
-          role: 'updated',
-          source: 'setTaskVerify',
-          sourceToolCallId: 'tool-call-verify',
-          taskId: 'task-1',
-          taskIdentifier: 'T-1',
-        }),
-      );
     });
 
-    it('does not create a work version for status-only updates', async () => {
+    it('handles status-only updates', async () => {
       const taskCaller = {
         updateStatus: vi.fn().mockResolvedValue({ data: { identifier: 'T-1' } }),
       };
-      const workModel = { registerTask: vi.fn() };
       const runtime = createTaskRuntime({
         agentModel: { existsById: vi.fn() } as any,
         taskCaller: taskCaller as any,
         taskModel: {} as any,
         taskService: {} as any,
-        workModel: workModel as any,
       });
 
       const result = await runtime.updateTaskStatus({ identifier: 'T-1', status: 'completed' });
@@ -772,7 +729,6 @@ describe('createTaskRuntime', () => {
         id: 'T-1',
         status: 'completed',
       });
-      expect(workModel.registerTask).not.toHaveBeenCalled();
     });
   });
 

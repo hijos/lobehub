@@ -1,4 +1,4 @@
-import { Switch } from 'antd';
+import { Switch } from '@lobehub/ui/base-ui';
 import { LinkIcon } from 'lucide-react';
 import { memo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';

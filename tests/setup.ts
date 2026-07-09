@@ -106,6 +106,22 @@ interface TestBaseUIButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElem
   variant?: string;
 }
 
+interface TestBaseUISwitchProps extends Omit<
+  ButtonHTMLAttributes<HTMLButtonElement>,
+  'onChange' | 'onClick' | 'value'
+> {
+  checked?: boolean;
+  checkedChildren?: ReactNode;
+  defaultChecked?: boolean;
+  defaultValue?: boolean;
+  loading?: boolean;
+  onChange?: (checked: boolean, event: React.MouseEvent<HTMLButtonElement>) => void;
+  onClick?: (checked: boolean, event: React.MouseEvent<HTMLButtonElement>) => void;
+  size?: string;
+  unCheckedChildren?: ReactNode;
+  value?: boolean;
+}
+
 const getNativeButtonType = (type?: string): NativeButtonType =>
   type === 'submit' || type === 'reset' ? type : 'button';
 
@@ -155,6 +171,48 @@ const TestBaseUIButton = (props: TestBaseUIButtonProps) => {
   );
 };
 
+const TestBaseUISwitch = (props: TestBaseUISwitchProps) => {
+  const {
+    checked,
+    checkedChildren,
+    defaultChecked,
+    defaultValue,
+    disabled,
+    loading,
+    onChange,
+    onClick,
+    size: _size,
+    unCheckedChildren,
+    value,
+    ...buttonProps
+  } = props;
+  const [innerChecked, setInnerChecked] = React.useState(defaultValue ?? defaultChecked ?? false);
+  const currentChecked = value ?? checked ?? innerChecked;
+
+  return React.createElement(
+    'button',
+    {
+      ...buttonProps,
+      'aria-busy': loading || undefined,
+      'aria-checked': currentChecked,
+      'disabled': disabled || loading,
+      'role': 'switch',
+      'type': 'button',
+      'onClick': (event: React.MouseEvent<HTMLButtonElement>) => {
+        const nextChecked = !currentChecked;
+
+        if (value === undefined && checked === undefined) {
+          setInnerChecked(nextChecked);
+        }
+
+        onChange?.(nextChecked, event);
+        onClick?.(nextChecked, event);
+      },
+    },
+    currentChecked ? checkedChildren : unCheckedChildren,
+  );
+};
+
 // base-ui Button requires the app-level motion provider. Unit tests exercise
 // consuming components, so a native button keeps interaction behavior stable.
 vi.mock('@lobehub/ui/base-ui', async (importOriginal) => {
@@ -163,6 +221,7 @@ vi.mock('@lobehub/ui/base-ui', async (importOriginal) => {
   return {
     ...actual,
     Button: TestBaseUIButton,
+    Switch: TestBaseUISwitch,
   };
 });
 

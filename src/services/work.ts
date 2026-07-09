@@ -4,6 +4,8 @@ import type {
   RegisterTaskWorkParams,
   WorkItem,
   WorkListItem,
+  WorkSummaryItem,
+  WorkType,
   WorkVersionEventItem,
   WorkVersionEventMap,
   WorkVersionItem,
@@ -13,12 +15,24 @@ import { mutate } from '@/libs/swr';
 import { isMessageListKey, matchDomain, workKeys } from '@/libs/swr/keys';
 import { lambdaClient } from '@/libs/trpc/client';
 
+/** One cursor page of the workspace-wide Work list (resource page 产物 gallery). */
+export interface WorkSummaryPage {
+  items: WorkSummaryItem[];
+  nextCursor: string | null;
+}
+
 class WorkService {
   listByConversation = async (params: {
     limit?: number;
     threadId?: string | null;
     topicId?: string | null;
   }): Promise<WorkListItem[]> => lambdaClient.work.listByConversation.query(params);
+
+  listByWorkspace = async (params: {
+    cursor?: string | null;
+    limit?: number;
+    type?: WorkType | null;
+  }): Promise<WorkSummaryPage> => lambdaClient.work.listByWorkspace.query(params);
 
   listByRootOperation = async (params: {
     limit?: number;

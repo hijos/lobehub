@@ -88,6 +88,16 @@ export const workRouter = router({
     )
     .query(async ({ ctx, input }) => ctx.workModel.listByConversation(input)),
 
+  listByWorkspace: workProcedure
+    .input(
+      z.object({
+        cursor: z.string().nullable().optional(),
+        limit: z.number().min(1).max(100).default(30),
+        type: z.enum(['task', 'document', 'linear', 'github']).nullable().optional(),
+      }),
+    )
+    .query(async ({ ctx, input }) => ctx.workModel.listByWorkspace(input)),
+
   listByRootOperation: workProcedure
     .input(
       z.object({

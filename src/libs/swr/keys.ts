@@ -196,6 +196,17 @@ export const workKeys = {
     threadId ?? null,
   ]),
   versions: def('work:versions', (workId: string) => ['work:versions', workId]),
+  // Cross-topic Work gallery on the resource page: keyed by owner scope +
+  // optional type filter + keyset cursor (one entry per infinite-scroll page).
+  workspace: def(
+    'work:workspace',
+    (workspaceId: string | null | undefined, type: string | null, cursor?: string | null) => [
+      'work:workspace',
+      workspaceId ?? null,
+      type ?? 'all',
+      cursor ?? null,
+    ],
+  ),
 };
 
 // ---- brief --------------------------------------------------------------

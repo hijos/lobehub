@@ -9,13 +9,19 @@ import type {
   WorkVersionSnapshot,
 } from '@lobechat/types';
 import type { SQL } from 'drizzle-orm';
-import { and, desc, eq, or, sql } from 'drizzle-orm';
+import { and, desc, eq, or } from 'drizzle-orm';
 
 import { tasks } from '../../schemas/task';
 import { works, workVersions } from '../../schemas/work';
 import { taskOwnership, versionOwnership, type WorkContext, workOwnership } from './context';
 import { getTotalCostByWorkIds } from './cost';
-import { currentVersions, type TaskWorkSummaryQueryRow, versionEventSelection } from './internal';
+import {
+  currentVersions,
+  taskSummaryFields,
+  taskSummaryJoin,
+  type TaskWorkSummaryQueryRow,
+  versionEventSelection,
+} from './internal';
 import { createVersion, findById, resolveWorkUpsertConflict } from './writes';
 
 const normalizeTaskLookup = (value?: string) => {
@@ -141,31 +147,13 @@ export const listTaskVersionEvents = async (
 ): Promise<TaskWorkVersionEventItem[]> => {
   const rows = await ctx.db
     .select({
-      // A LEFT JOIN miss (deleted task) leaves the whole tasks row null; the
-      // live columns below coalesce onto the version snapshot so the orphan
-      // still renders, while `tasks.id is null` is the deletion signal.
-      taskDeleted: sql<boolean>`${tasks.id} is null`,
-      taskDescription: sql<string | null>`${workVersions.snapshot}->'task'->>'description'`,
-      taskName: sql<
-        string | null
-      >`coalesce(${tasks.name}, ${workVersions.snapshot}->'task'->>'name')`,
-      taskPriority: sql<
-        number | null
-      >`coalesce(${tasks.priority}, (${workVersions.snapshot}->'task'->>'priority')::integer)`,
-      taskStatus: sql<
-        string | null
-      >`coalesce(${tasks.status}, ${workVersions.snapshot}->'task'->>'status')`,
+      ...taskSummaryFields(workVersions.snapshot),
       version: versionEventSelection,
       work: works,
     })
     .from(workVersions)
     .innerJoin(works, and(eq(workVersions.workId, works.id), workOwnership(ctx)))
-    // LEFT JOIN so orphaned task Works (task deleted without the tool path)
-    // still surface; deletion is derived from the missing tasks row.
-    .leftJoin(
-      tasks,
-      and(eq(works.resourceType, 'task'), eq(works.resourceId, tasks.id), taskOwnership(ctx)),
-    )
+    .leftJoin(tasks, taskSummaryJoin(ctx))
     .where(and(versionOwnership(ctx), ...filters, eq(works.type, 'task')))
     .orderBy(desc(workVersions.createdAt))
     .limit(limit);
@@ -193,21 +181,7 @@ export const listTaskWorkSummaryRows = async (
   ctx.db
     .select({
       event: versionEventSelection,
-      // A LEFT JOIN miss (deleted task) nulls the tasks row; live columns
-      // coalesce onto the current-version snapshot so the orphan card still
-      // renders, and `tasks.id is null` is the deletion signal. Description
-      // stays snapshot-only (matches summary semantics — never live).
-      taskDeleted: sql<boolean>`${tasks.id} is null`,
-      taskDescription: sql<string | null>`${currentVersions.snapshot}->'task'->>'description'`,
-      taskName: sql<
-        string | null
-      >`coalesce(${tasks.name}, ${currentVersions.snapshot}->'task'->>'name')`,
-      taskPriority: sql<
-        number | null
-      >`coalesce(${tasks.priority}, (${currentVersions.snapshot}->'task'->>'priority')::integer)`,
-      taskStatus: sql<
-        string | null
-      >`coalesce(${tasks.status}, ${currentVersions.snapshot}->'task'->>'status')`,
+      ...taskSummaryFields(currentVersions.snapshot),
       version: {
         createdAt: currentVersions.createdAt,
         id: currentVersions.id,
@@ -218,11 +192,7 @@ export const listTaskWorkSummaryRows = async (
     .from(workVersions)
     .innerJoin(works, and(eq(workVersions.workId, works.id), workOwnership(ctx)))
     .innerJoin(currentVersions, eq(works.currentVersionId, currentVersions.id))
-    // LEFT JOIN so orphaned task Works still surface in summaries.
-    .leftJoin(
-      tasks,
-      and(eq(works.resourceType, 'task'), eq(works.resourceId, tasks.id), taskOwnership(ctx)),
-    )
+    .leftJoin(tasks, taskSummaryJoin(ctx))
     .where(and(versionOwnership(ctx), ...filters, eq(works.type, 'task')))
     .orderBy(desc(workVersions.createdAt), desc(works.updatedAt))
     .limit(rowLimit);

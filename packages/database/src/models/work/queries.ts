@@ -2,22 +2,28 @@ import type {
   DocumentWorkListItem,
   DocumentWorkVersionSnapshot,
   GithubWorkListItem,
+  GithubWorkSummaryItem,
   GithubWorkVersionSnapshot,
   LinearWorkListItem,
+  LinearWorkSummaryItem,
   LinearWorkVersionSnapshot,
   TaskWorkListItem,
+  WorkItem,
   WorkListItem,
   WorkSummaryItem,
   WorkSummaryMap,
+  WorkType,
   WorkVersionEventItem,
   WorkVersionEventMap,
   WorkVersionItem,
 } from '@lobechat/types';
-import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 
 import { tasks } from '../../schemas/task';
 import { works, workVersions } from '../../schemas/work';
 import { taskOwnership, versionOwnership, type WorkContext, workOwnership } from './context';
+import { getTotalCostByWorkIds } from './cost';
 import {
   listDocumentVersionEvents,
   listDocumentWorkSummaryRows,
@@ -28,7 +34,13 @@ import {
   listGithubWorkSummaryRows,
   toGithubWorkSummaries,
 } from './github';
-import { currentVersions, snapshotField, type SnapshotWorkType } from './internal';
+import {
+  currentVersions,
+  snapshotField,
+  type SnapshotWorkType,
+  taskSummaryFields,
+  taskSummaryJoin,
+} from './internal';
 import {
   listLinearVersionEvents,
   listLinearWorkSummaryRows,
@@ -320,4 +332,168 @@ export const listVersions = async (
     .orderBy(desc(workVersions.version));
 
   return rows.map((row) => row.version);
+};
+
+/** Default page size for the workspace-wide Work list. */
+const WORKSPACE_WORK_LIMIT = 30;
+
+export interface ListByWorkspaceParams {
+  cursor?: string | null;
+  limit?: number;
+  type?: WorkType | null;
+}
+
+// Not exported: only used as this module's own return-type annotation. The
+// service layer (`src/services/work.ts`) names its own `WorkSummaryPage` for
+// client consumption, mirroring how `VerifyReportSummaryPage` is named once,
+// at the service boundary, rather than duplicated from the db layer.
+interface WorkSummaryPage {
+  items: WorkSummaryItem[];
+  nextCursor: string | null;
+}
+
+/**
+ * Keyset cursor over the `(updatedAt, id)` order key. `updatedAt` alone is not
+ * unique (batch task creation stamps many rows in the same instant), so the id
+ * tie-breaker prevents rows from being skipped or duplicated across pages. The
+ * cursor stays opaque to callers: `<updatedAt ISO>|<work id>` (a work id never
+ * contains `|`, and neither does an ISO timestamp).
+ */
+const encodeWorkCursor = (work: Pick<WorkItem, 'id' | 'updatedAt'>): string =>
+  `${work.updatedAt.toISOString()}|${work.id}`;
+
+const decodeWorkCursor = (cursor: string): { id: string; updatedAt: Date } | null => {
+  const separator = cursor.indexOf('|');
+  if (separator === -1) return null;
+
+  const updatedAt = new Date(cursor.slice(0, separator));
+  const id = cursor.slice(separator + 1);
+  if (!id || Number.isNaN(updatedAt.getTime())) return null;
+
+  return { id, updatedAt };
+};
+
+/**
+ * Workspace-wide (cross-topic) Work list for the resource page's 产物 group.
+ * Unlike the conversation/root-operation queries, this pages off `works` as the
+ * primary table (not `work_versions` events), so `event`/`version` both reflect
+ * the Work's current version. `type` optionally narrows to one entry (task /
+ * document / linear / github); omitting it powers the combined 全部 view.
+ */
+export const listByWorkspace = async (
+  ctx: WorkContext,
+  params: ListByWorkspaceParams,
+): Promise<WorkSummaryPage> => {
+  const limit = params.limit ?? WORKSPACE_WORK_LIMIT;
+
+  const filters: SQL[] = [workOwnership(ctx)];
+  if (params.type) filters.push(eq(works.type, params.type));
+
+  if (params.cursor) {
+    const decoded = decodeWorkCursor(params.cursor);
+    // desc(updatedAt), desc(id): the next page holds rows strictly "after" the
+    // cursor in that order — older updatedAt, or same updatedAt with a lower id.
+    if (decoded)
+      filters.push(
+        or(
+          lt(works.updatedAt, decoded.updatedAt),
+          and(eq(works.updatedAt, decoded.updatedAt), lt(works.id, decoded.id)),
+        )!,
+      );
+  }
+
+  const rows = await ctx.db
+    .select({
+      // Global view has no mutation event to anchor on, so the current version
+      // doubles as the surfacing event (mirrors the summary row shape).
+      event: {
+        createdAt: currentVersions.createdAt,
+        cumulativeCost: currentVersions.cumulativeCost,
+        id: currentVersions.id,
+        metadata: currentVersions.metadata,
+        role: currentVersions.role,
+        rootOperationId: currentVersions.rootOperationId,
+        source: currentVersions.source,
+        sourceMessageId: currentVersions.sourceMessageId,
+        sourceToolCallId: currentVersions.sourceToolCallId,
+        version: currentVersions.version,
+      },
+      snapshot: currentVersions.snapshot,
+      ...taskSummaryFields(currentVersions.snapshot),
+      version: {
+        createdAt: currentVersions.createdAt,
+        id: currentVersions.id,
+        version: currentVersions.version,
+      },
+      work: works,
+    })
+    .from(works)
+    .innerJoin(currentVersions, eq(works.currentVersionId, currentVersions.id))
+    .leftJoin(tasks, taskSummaryJoin(ctx))
+    .where(and(...filters))
+    .orderBy(desc(works.updatedAt), desc(works.id))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+
+  const costByWorkId = await getTotalCostByWorkIds(
+    ctx,
+    pageRows.map((row) => row.work.id),
+  );
+
+  const items = pageRows.map((row): WorkSummaryItem => {
+    const base = {
+      ...row.work,
+      event: row.event,
+      totalCost: costByWorkId.get(row.work.id) ?? null,
+      version: row.version,
+    };
+
+    switch (row.work.type) {
+      case 'document': {
+        return {
+          ...base,
+          document: (row.snapshot as { document: DocumentWorkVersionSnapshot }).document,
+          resourceType: 'document',
+          type: 'document',
+        };
+      }
+
+      case 'linear': {
+        return {
+          ...base,
+          linear: (row.snapshot as { linear: LinearWorkVersionSnapshot }).linear,
+          resourceType: row.work.resourceType as LinearWorkSummaryItem['resourceType'],
+          type: 'linear',
+        };
+      }
+
+      case 'github': {
+        return {
+          ...base,
+          github: (row.snapshot as { github: GithubWorkVersionSnapshot }).github,
+          resourceType: row.work.resourceType as GithubWorkSummaryItem['resourceType'],
+          type: 'github',
+        };
+      }
+
+      default: {
+        return {
+          ...base,
+          resourceType: 'task',
+          task: {
+            description: row.taskDescription,
+            name: row.taskName,
+            priority: row.taskPriority,
+            status: row.taskStatus,
+          },
+          taskDeleted: row.taskDeleted,
+          type: 'task',
+        };
+      }
+    }
+  });
+
+  return { items, nextCursor: hasMore ? encodeWorkCursor(pageRows.at(-1)!.work) : null };
 };

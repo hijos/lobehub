@@ -95,5 +95,8 @@ export class WorkModel {
     topicId?: string | null;
   }) => queries.listByConversation(this.ctx, params);
 
+  listByWorkspace = (params: queries.ListByWorkspaceParams) =>
+    queries.listByWorkspace(this.ctx, params);
+
   listVersions = (workId: string) => queries.listVersions(this.ctx, workId);
 }

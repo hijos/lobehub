@@ -11,8 +11,9 @@ import type { SQL } from 'drizzle-orm';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
+import { tasks } from '../../schemas/task';
 import { works, workVersions } from '../../schemas/work';
-import { versionOwnership, type WorkContext, workOwnership } from './context';
+import { taskOwnership, versionOwnership, type WorkContext, workOwnership } from './context';
 
 /**
  * Second reference to `work_versions` for summary/list queries that both
@@ -85,6 +86,37 @@ export const snapshotField = <Snapshot>(
   snapshotColumn: (typeof workVersions)['snapshot'] | (typeof currentVersions)['snapshot'],
   type: SnapshotWorkType,
 ) => sql<Snapshot>`${snapshotColumn}->${sql.raw(`'${type}'`)}`;
+
+/**
+ * Task live-column projection shared by every task summary/list query. `tasks`
+ * columns take priority; a LEFT JOIN miss (task deleted without the tool path)
+ * nulls the whole `tasks` row, so name/priority/status coalesce onto
+ * `snapshotColumn` (the version snapshot) and `tasks.id is null` becomes the
+ * orphan-deletion signal. `taskDescription` stays snapshot-only by design (no
+ * coalesce) — description isn't part of the summary's live-data contract.
+ * `snapshotColumn` is `workVersions.snapshot` for event rows or
+ * `currentVersions.snapshot` for summary rows.
+ */
+export const taskSummaryFields = (
+  snapshotColumn: (typeof workVersions)['snapshot'] | (typeof currentVersions)['snapshot'],
+) => ({
+  taskDeleted: sql<boolean>`${tasks.id} is null`,
+  taskDescription: sql<string | null>`${snapshotColumn}->'task'->>'description'`,
+  taskName: sql<string | null>`coalesce(${tasks.name}, ${snapshotColumn}->'task'->>'name')`,
+  taskPriority: sql<
+    number | null
+  >`coalesce(${tasks.priority}, (${snapshotColumn}->'task'->>'priority')::integer)`,
+  taskStatus: sql<string | null>`coalesce(${tasks.status}, ${snapshotColumn}->'task'->>'status')`,
+});
+
+/**
+ * LEFT JOIN condition pairing a Work row to its live `tasks` row (task type
+ * only, owner-scoped). Callers use a LEFT JOIN (not INNER) so orphaned task
+ * Works — the task deleted without the tool path — still surface; deletion is
+ * then derived from the missing `tasks` row (see `taskSummaryFields`).
+ */
+export const taskSummaryJoin = (ctx: WorkContext) =>
+  and(eq(works.resourceType, 'task'), eq(works.resourceId, tasks.id), taskOwnership(ctx));
 
 /**
  * Shared version-event query for snapshot-backed work types; `task` keeps

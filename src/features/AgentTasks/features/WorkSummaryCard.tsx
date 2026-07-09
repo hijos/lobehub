@@ -61,9 +61,17 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
 interface WorkSummaryCardProps {
   className?: string;
   item: WorkSummaryItem;
+  /**
+   * Override the click target. The default opens the chat portal (task detail /
+   * document), which only renders inside the conversation UI; surfaces without
+   * that portal (e.g. the resource page's 产物 gallery) pass their own
+   * navigation here. Only ever receives a clickable item — the card still gates
+   * clickability on external-url presence and task-deleted state.
+   */
+  onOpen?: (item: WorkSummaryItem) => void;
 }
 
-const WorkSummaryCard = memo<WorkSummaryCardProps>(({ className, item }) => {
+const WorkSummaryCard = memo<WorkSummaryCardProps>(({ className, item, onOpen }) => {
   const { t } = useTranslation('chat');
   const [openDocument, openTaskDetail] = useChatStore((s) => [s.openDocument, s.openTaskDetail]);
   const cost = formatWorkVersionCost(item.totalCost);
@@ -104,6 +112,11 @@ const WorkSummaryCard = memo<WorkSummaryCardProps>(({ className, item }) => {
   const taskDeleted = item.resourceType === 'task' && item.taskDeleted;
   const clickable = (isDocument || (!isLinear && !isGithub) || !!externalUrl) && !taskDeleted;
   const handleOpen = () => {
+    if (onOpen) {
+      onOpen(item);
+      return;
+    }
+
     if (isDocument) {
       openDocument(item.document.id, item.event.metadata?.agentDocumentId);
       return;

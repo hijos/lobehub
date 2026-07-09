@@ -1,86 +1,33 @@
 import { builtinTools } from '@lobechat/builtin-tools';
-import { resolveWorkRegistration } from '@lobechat/builtin-tools/workRegistration';
-import { type LobeChatDatabase } from '@lobechat/database';
+import {
+  resolveWorkRegistration,
+  toWorkRegistrationIntent,
+} from '@lobechat/builtin-tools/workRegistration';
+import { type WorkRegistrationIntent } from '@lobechat/types';
 
-import { WorkModel } from '@/database/models/work';
-
-import { type ToolExecutionContext, type ToolExecutionResult } from './types';
-
-interface RegisterBuiltinToolWorkParams {
-  apiName: string;
-  args: Record<string, any>;
-  context: ToolExecutionContext;
-  /** Fallback db when the context carries none (mirrors the lobehubSkill branch). */
-  db: LobeChatDatabase;
-  identifier: string;
-  result: ToolExecutionResult;
-  /** Fallback user id when the context carries none. */
-  userId: string;
-}
+import { type ToolExecutionResult } from './types';
 
 /**
- * Manifest-driven Work registration for the server tool-execution path.
+ * Manifest-driven Work registration intent for the server tool-execution path.
  *
- * Runs inline right after a builtin runtime returns (before the result is
- * published) so the Work version is durable before `tool_end` fires — the same
- * ordering the old imperative in-runtime registration guaranteed, minus the
- * per-tool boilerplate. Reads the API's declarative `work` config, extracts the
- * resource identity from the result/args, and upserts the Work version via
- * `WorkModel`.
+ * The executor no longer writes the Work itself: it only RESOLVES what should
+ * be registered (from the API's declarative `work` config + the tool
+ * result/args) and hands the intent back on the result. The agent runtime
+ * (`callTool` / `callToolsBatch`) persists it ONCE the tool call's cumulative
+ * cost is known, so the Work version lands with its `cumulativeCost` instead of
+ * being created cost-less and back-filled.
  *
- * Best-effort: any failure is swallowed so bookkeeping never breaks the tool
- * result. No-op for APIs that declare no `work` config.
+ * Returns `undefined` for APIs that declare no `work` config or resolve to no
+ * targets. Pure + side-effect-free — provenance and cost are supplied by the
+ * runtime at persist time.
  */
-export const registerBuiltinToolWork = async ({
-  apiName,
-  args,
-  context,
-  db,
-  identifier,
-  result,
-  userId,
-}: RegisterBuiltinToolWorkParams): Promise<void> => {
-  const resolved = resolveWorkRegistration(builtinTools, identifier, apiName, { args, result });
-  if (!resolved) return;
+export const resolveBuiltinToolWorkIntent = (
+  identifier: string,
+  apiName: string,
+  payload: { args: Record<string, any>; result: ToolExecutionResult },
+): WorkRegistrationIntent | undefined => {
+  const resolved = resolveWorkRegistration(builtinTools, identifier, apiName, payload);
+  if (!resolved) return undefined;
 
-  try {
-    const workModel = new WorkModel(
-      context.serverDB ?? db,
-      context.userId ?? userId,
-      context.workspaceId,
-    );
-    const rootOperationId = context.rootOperationId ?? context.operationId;
-
-    // Tool-driven delete: drop the task's Work (versions cascade). Non-tool
-    // deletes leave the Work orphaned for the UI to mark as "deleted".
-    if (resolved.action === 'delete') {
-      await Promise.all(
-        resolved.targets.map((target) =>
-          target.taskId ? workModel.deleteTaskWork({ taskId: target.taskId }) : undefined,
-        ),
-      );
-      return;
-    }
-
-    const { role, targets } = resolved;
-
-    await Promise.all(
-      targets.map((target) =>
-        workModel.registerTask({
-          actorAgentId: context.agentId ?? null,
-          role,
-          rootOperationId,
-          source: apiName,
-          sourceMessageId: context.toolMessageId,
-          sourceToolCallId: context.toolCallId,
-          taskId: target.taskId,
-          taskIdentifier: target.taskIdentifier,
-          threadId: context.threadId,
-          topicId: context.topicId,
-        }),
-      ),
-    );
-  } catch (error) {
-    console.error('Failed to register Work for %s:%s: %O', identifier, apiName, error);
-  }
+  return toWorkRegistrationIntent(resolved);
 };

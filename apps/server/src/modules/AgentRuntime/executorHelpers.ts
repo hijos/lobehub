@@ -2,7 +2,7 @@ import { type AgentState } from '@lobechat/agent-runtime';
 import { LobeActivatorIdentifier } from '@lobechat/builtin-tool-activator';
 import { type OperationToolSet } from '@lobechat/context-engine';
 import { type ToolType } from '@lobechat/observability-otel/modules/agent-runtime';
-import { type ChatToolPayload } from '@lobechat/types';
+import { type ChatToolPayload, type WorkRegistrationIntent } from '@lobechat/types';
 import debug from 'debug';
 
 import { WorkModel } from '@/database/models/work';
@@ -68,59 +68,123 @@ export const archiveRuntimeToolResult = async (
   return archive.content === result.content ? result : { ...result, content: archive.content };
 };
 
-export const attachWorkSourceMessage = async ({
+/**
+ * Persist a Work version from the executor's registration intent, stamping the
+ * tool call's cumulative cost/usage onto the row at insert time. Replaces the
+ * old "register cost-less in the executor, back-fill cost later" two-step: the
+ * executor now only resolves the intent, and the runtime writes it once here,
+ * after `accumulateTool` has computed the cumulative cost.
+ *
+ * Best-effort: any failure is swallowed so Work bookkeeping never breaks the
+ * tool result. Runs AFTER `tool_end` publishes (cost is known only then), so
+ * the Work row becomes durable slightly later than the tool_end event — the
+ * conversation view self-heals from the tool message metadata; the works
+ * sidebar refresh gap is tracked as a follow-up.
+ */
+export const registerWorkFromIntent = async ({
+  actorAgentId,
+  intent,
   rootOperationId,
   serverDB,
   sourceMessageId,
   sourceToolCallId,
+  sourceToolName,
+  state,
+  threadId,
+  topicId,
   userId,
   workspaceId,
 }: {
+  actorAgentId?: string | null;
+  intent: WorkRegistrationIntent;
   rootOperationId?: string;
   serverDB: LobeChatDatabase;
   sourceMessageId?: string;
   sourceToolCallId?: string;
+  /** Fallback `source` for task Works (the API name); skills use their own toolName. */
+  sourceToolName: string;
+  state: Pick<AgentState, 'cost' | 'usage'>;
+  threadId?: string | null;
+  topicId?: string;
   userId?: string;
   workspaceId?: string;
 }) => {
-  if (!sourceMessageId || !sourceToolCallId || !userId) return;
+  if (!userId) return;
+
+  const cumulative = buildWorkVersionCumulativeUsage({ cost: state.cost, usage: state.usage });
 
   try {
-    await new WorkModel(serverDB, userId, workspaceId).attachSourceMessage({
+    const workModel = new WorkModel(serverDB, userId, workspaceId);
+
+    if (intent.type === 'task') {
+      const { action, role, targets } = intent;
+
+      if (action === 'delete') {
+        await Promise.all(
+          targets.map((target) =>
+            target.taskId ? workModel.deleteTaskWork({ taskId: target.taskId }) : undefined,
+          ),
+        );
+        return;
+      }
+
+      if (!role) return;
+
+      await Promise.all(
+        targets.map((target) =>
+          workModel.registerTask({
+            actorAgentId,
+            role,
+            rootOperationId,
+            source: sourceToolName,
+            sourceMessageId,
+            sourceToolCallId,
+            taskId: target.taskId,
+            taskIdentifier: target.taskIdentifier,
+            threadId,
+            topicId,
+            ...cumulative,
+          }),
+        ),
+      );
+      return;
+    }
+
+    if (intent.type === 'document') {
+      if (intent.action === 'delete') {
+        await workModel.deleteDocumentWork(intent.document);
+        return;
+      }
+
+      await workModel.registerDocument({
+        ...intent.document,
+        ...cumulative,
+        actorAgentId,
+        rootOperationId,
+        sourceMessageId,
+        sourceToolCallId,
+        threadId,
+        topicId,
+      });
+      return;
+    }
+
+    // skill (linear / github): normalize the untruncated payload into a Work
+    await workModel.handleSkillToolResult({
+      actorAgentId,
+      args: intent.args,
+      data: intent.data,
+      provider: intent.provider,
       rootOperationId,
       sourceMessageId,
       sourceToolCallId,
+      threadId,
+      toolName: intent.toolName,
+      topicId,
+      ...cumulative,
     });
   } catch (error) {
-    log('attachWorkSourceMessage failed for toolCallId=%s: %O', sourceToolCallId, error);
-  }
-};
-
-export const updateWorkVersionCumulativeUsage = async ({
-  rootOperationId,
-  serverDB,
-  sourceToolCallId,
-  state,
-  userId,
-  workspaceId,
-}: {
-  rootOperationId?: string;
-  serverDB: LobeChatDatabase;
-  sourceToolCallId?: string;
-  state: Pick<AgentState, 'cost' | 'usage'>;
-  userId?: string;
-  workspaceId?: string;
-}) => {
-  if (!rootOperationId || !sourceToolCallId || !userId) return;
-
-  try {
-    await new WorkModel(serverDB, userId, workspaceId).updateVersionCumulativeUsage({
-      rootOperationId,
-      sourceToolCallId,
-      ...buildWorkVersionCumulativeUsage({ cost: state.cost, usage: state.usage }),
-    });
-  } catch (error) {
-    log('updateWorkVersionCumulativeUsage failed for toolCallId=%s: %O', sourceToolCallId, error);
+    log('registerWorkFromIntent failed for toolCallId=%s: %O', sourceToolCallId, error);
   }
 };
 

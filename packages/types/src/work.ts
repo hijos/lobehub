@@ -276,6 +276,8 @@ export interface RegisterDocumentWorkParams {
   actorAgentId?: string | null;
   agentDocumentId?: string | null;
   agentId?: string | null;
+  cumulativeCost?: number | null;
+  cumulativeUsage?: WorkVersionCumulativeUsage | null;
   description?: string | null;
   documentId: string;
   role: WorkVersionRole;
@@ -306,6 +308,8 @@ export interface RegisterLinearWorkParams {
   color?: string | null;
   content?: string | null;
   createdAt?: string | null;
+  cumulativeCost?: number | null;
+  cumulativeUsage?: WorkVersionCumulativeUsage | null;
   description?: string | null;
   dueDate?: string | null;
   icon?: string | null;
@@ -349,6 +353,8 @@ export interface RegisterGithubWorkParams {
   body?: string | null;
   closedAt?: string | null;
   createdAt?: string | null;
+  cumulativeCost?: number | null;
+  cumulativeUsage?: WorkVersionCumulativeUsage | null;
   draft?: boolean | null;
   headRef?: string | null;
   labels?: string[];
@@ -388,6 +394,8 @@ export const isWorkSkillProvider = (provider?: string | null): provider is WorkS
 export interface RegisterSkillToolResultWorkParams {
   actorAgentId?: string | null;
   args?: Record<string, unknown>;
+  cumulativeCost?: number | null;
+  cumulativeUsage?: WorkVersionCumulativeUsage | null;
   data?: unknown;
   provider: string;
   rootOperationId?: string | null;
@@ -410,6 +418,8 @@ export type RegisterGithubToolResultWorkParams = Omit<
 
 export interface RegisterTaskWorkParams {
   actorAgentId?: string | null;
+  cumulativeCost?: number | null;
+  cumulativeUsage?: WorkVersionCumulativeUsage | null;
   role: WorkVersionRole;
   rootOperationId?: string | null;
   source: string;
@@ -421,9 +431,55 @@ export interface RegisterTaskWorkParams {
   topicId?: string | null;
 }
 
-export interface UpdateWorkVersionCumulativeUsageParams {
-  cumulativeCost?: number | null;
-  cumulativeUsage?: WorkVersionCumulativeUsage | null;
-  rootOperationId?: string | null;
-  sourceToolCallId?: string | null;
+/** One resolved task Work target extracted from a tool result / args. */
+export interface WorkTaskTarget {
+  taskId?: string;
+  taskIdentifier?: string;
 }
+
+/**
+ * Registration intent emitted by the tool-execution layer (`BuiltinToolsExecutor`,
+ * document runtime) and consumed by the agent runtime (`callTool` /
+ * `callToolsBatch`) once the tool call's cumulative cost is known, so the Work
+ * version is inserted ONCE carrying its `cumulativeCost` instead of created
+ * cost-less and back-filled by a second UPDATE.
+ *
+ * Carries only the type-specific resource identity; the runtime supplies
+ * provenance (operation / message / tool-call ids, thread / topic, actor agent)
+ * and the cumulative usage snapshot at persist time. The `skill` variant also
+ * carries the tool's UNTRUNCATED result payload (`data`), because the runtime
+ * only ever sees the truncated `content` — the identity fields (issue/PR url,
+ * number, …) live exclusively in the raw payload.
+ */
+export type WorkRegistrationIntent =
+  | {
+      action: 'create' | 'update' | 'delete';
+      role?: WorkVersionRole;
+      targets: WorkTaskTarget[];
+      type: 'task';
+    }
+  | {
+      args?: Record<string, unknown>;
+      data: unknown;
+      provider: string;
+      toolName: string;
+      type: 'skill';
+    }
+  | {
+      action: 'register';
+      document: {
+        agentDocumentId?: string | null;
+        agentId?: string | null;
+        description?: string | null;
+        documentId: string;
+        role: WorkVersionRole;
+        source: string;
+        url?: string | null;
+      };
+      type: 'document';
+    }
+  | {
+      action: 'delete';
+      document: { agentDocumentId?: string | null; agentId?: string | null; documentId: string };
+      type: 'document';
+    };

@@ -1,7 +1,6 @@
 import type {
   DeleteDocumentWorkParams,
   DeleteTaskWorkParams,
-  UpdateWorkVersionCumulativeUsageParams,
   WorkItem,
   WorkVersionItem,
 } from '@lobechat/types';
@@ -120,6 +119,13 @@ export const createVersion = async (
           .insert(workVersions)
           .values({
             actorAgentId: params.actorAgentId ?? null,
+            // Written once at insert time: the agent runtime resolves the tool
+            // call's cumulative cost only AFTER execution (in `accumulateTool`),
+            // then registers the Work — so cost lands with the row instead of a
+            // follow-up UPDATE. Null for non-agent paths (e.g. manual document
+            // edits) that carry no cost.
+            cumulativeCost: params.cumulativeCost ?? null,
+            cumulativeUsage: params.cumulativeUsage ?? null,
             metadata: metadata ?? null,
             role: params.role,
             rootOperationId: params.rootOperationId ?? null,
@@ -156,54 +162,6 @@ export const createVersion = async (
   }
 
   throw new Error(`Failed to create ${work.type} work version after max retries`);
-};
-
-export const attachSourceMessage = async (
-  ctx: WorkContext,
-  params: {
-    rootOperationId?: string | null;
-    sourceMessageId?: string | null;
-    sourceToolCallId?: string | null;
-  },
-) => {
-  if (!params.sourceMessageId || !params.sourceToolCallId) return;
-
-  const filters = [
-    versionOwnership(ctx),
-    eq(workVersions.sourceToolCallId, params.sourceToolCallId),
-    isNull(workVersions.sourceMessageId),
-  ];
-  if (params.rootOperationId) {
-    filters.push(eq(workVersions.rootOperationId, params.rootOperationId));
-  }
-
-  await ctx.db
-    .update(workVersions)
-    .set({ sourceMessageId: params.sourceMessageId })
-    .where(and(...filters));
-};
-
-export const updateVersionCumulativeUsage = async (
-  ctx: WorkContext,
-  params: UpdateWorkVersionCumulativeUsageParams,
-) => {
-  if (!params.rootOperationId || !params.sourceToolCallId) return;
-
-  const updates: Partial<typeof workVersions.$inferInsert> = {};
-  if (params.cumulativeCost !== undefined) updates.cumulativeCost = params.cumulativeCost;
-  if (params.cumulativeUsage !== undefined) updates.cumulativeUsage = params.cumulativeUsage;
-  if (Object.keys(updates).length === 0) return;
-
-  await ctx.db
-    .update(workVersions)
-    .set(updates)
-    .where(
-      and(
-        versionOwnership(ctx),
-        eq(workVersions.rootOperationId, params.rootOperationId),
-        eq(workVersions.sourceToolCallId, params.sourceToolCallId),
-      ),
-    );
 };
 
 export const deleteDocumentWork = async (

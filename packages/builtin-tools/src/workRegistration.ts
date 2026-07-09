@@ -3,6 +3,7 @@ import type {
   LobeBuiltinTool,
   PluginApiWorkAction,
   PluginApiWorkConfig,
+  WorkRegistrationIntent,
   WorkVersionRole,
 } from '@lobechat/types';
 
@@ -150,3 +151,17 @@ export const resolveWorkRegistration = (
 
   return { action: config.action, role: workRoleFromAction(config.action), targets };
 };
+
+/**
+ * Tag a resolved task registration plan as the `task` variant of the runtime's
+ * {@link WorkRegistrationIntent} union. Shared so both dispatch layers (server
+ * `resolveBuiltinToolWorkIntent`, client `stashBuiltinToolWorkIntent`) emit the
+ * exact same intent shape from one place — `delete` stays role-less, so the
+ * discriminant is preserved end to end.
+ */
+export const toWorkRegistrationIntent = (
+  resolved: ResolvedWorkRegistration,
+): WorkRegistrationIntent =>
+  resolved.action === 'delete'
+    ? { action: 'delete', targets: resolved.targets, type: 'task' }
+    : { action: resolved.action, role: resolved.role, targets: resolved.targets, type: 'task' };

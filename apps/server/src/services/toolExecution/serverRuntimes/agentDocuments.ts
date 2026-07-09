@@ -121,26 +121,52 @@ export const agentDocumentsRuntime: ServerRuntimeRegistration = {
       return doc;
     };
 
+    // Emit a Work-registration intent instead of writing the version inline: the
+    // agent runtime persists it ONCE, stamping the tool call's cumulative cost at
+    // insert time (cost is known only after execution). The intent rides out on
+    // the tool result via the executor's `onWorkRegistration` sink. The document
+    // URL is still resolved here because the workspace-slug lookup lives in this
+    // request's registrar.
     const registerDocumentWork = async (input: {
       agentDocumentId?: string;
       agentId: string;
       documentId?: string;
       role: 'created' | 'updated';
       source: string;
-    }) =>
-      workRegistrar.registerDocumentWork({
-        ...input,
-        context: {
-          actorAgentId: context.agentId,
-          rootOperationId: context.rootOperationId ?? context.operationId,
-          sourceMessageId: context.toolMessageId,
-          sourceToolCallId: context.toolCallId,
-          threadId: context.threadId,
-          topicId: context.topicId,
-        },
-      });
+    }) => {
+      if (!input.documentId) return;
 
-    const deleteDocumentWork = workRegistrar.deleteDocumentWork;
+      context.onWorkRegistration?.({
+        action: 'register',
+        document: {
+          agentDocumentId: input.agentDocumentId,
+          agentId: input.agentId,
+          documentId: input.documentId,
+          role: input.role,
+          source: input.source,
+          url: await workRegistrar.buildRegisteredDocumentUrl(input.agentId, input.documentId),
+        },
+        type: 'document',
+      });
+    };
+
+    const deleteDocumentWork = async (input: {
+      agentDocumentId?: string;
+      agentId: string;
+      documentId?: string;
+    }) => {
+      if (!input.documentId) return;
+
+      context.onWorkRegistration?.({
+        action: 'delete',
+        document: {
+          agentDocumentId: input.agentDocumentId,
+          agentId: input.agentId,
+          documentId: input.documentId,
+        },
+        type: 'document',
+      });
+    };
 
     return new AgentDocumentsExecutionRuntime(
       {

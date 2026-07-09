@@ -314,6 +314,8 @@ const contextParams = (
 ): Pick<
   RegisterLinearWorkParams,
   | 'actorAgentId'
+  | 'cumulativeCost'
+  | 'cumulativeUsage'
   | 'rootOperationId'
   | 'source'
   | 'sourceMessageId'
@@ -322,6 +324,8 @@ const contextParams = (
   | 'topicId'
 > => ({
   actorAgentId: params.actorAgentId ?? null,
+  cumulativeCost: params.cumulativeCost ?? null,
+  cumulativeUsage: params.cumulativeUsage ?? null,
   rootOperationId: params.rootOperationId ?? null,
   source: params.toolName,
   sourceMessageId: params.sourceMessageId ?? null,

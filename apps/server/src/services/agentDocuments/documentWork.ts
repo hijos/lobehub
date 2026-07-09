@@ -13,22 +13,15 @@ const getAgentDocumentAppUrl = (): string | undefined => {
   }
 };
 
-/** Source/operation context normalized from either the server-runtime ToolExecutionContext or the lambda router's tool-context schema. */
-export interface DocumentWorkContext {
-  actorAgentId?: string | null;
-  rootOperationId?: string | null;
-  sourceMessageId?: string | null;
-  sourceToolCallId?: string | null;
-  threadId?: string | null;
-  topicId?: string | null;
-}
-
 /**
- * Shared best-effort Work registration for agent documents, used by both the
- * server tool runtime and the lambda `agentDocument` router so the two
- * registration paths cannot drift (field set, document URL building, error
- * handling). Failures are swallowed on purpose: Work bookkeeping must never
- * fail the document operation itself.
+ * Shared best-effort agent-document Work helpers for the server tool runtime
+ * and the lambda `agentDocument` router: document URL building (used when the
+ * server runtime registers Work) and Work deletion (used by the lambda's
+ * removeDocument mutation). Registration itself now lives with each caller —
+ * the server runtime writes Work with cost inline, and the legacy client
+ * runtime stashes an intent that `call_tool` writes once — so this registrar no
+ * longer owns a `registerDocumentWork`. Failures are swallowed on purpose: Work
+ * bookkeeping must never fail the document operation itself.
  *
  * The workspace slug lookup for URL building is memoized per registrar
  * instance, so create one registrar per runtime/request and reuse it.
@@ -67,47 +60,6 @@ export const createDocumentWorkRegistrar = (deps: {
     });
   };
 
-  const registerDocumentWork = async (input: {
-    agentDocumentId?: string | null;
-    agentId: string;
-    context: DocumentWorkContext;
-    description?: string | null;
-    documentId?: string | null;
-    role: 'created' | 'updated';
-    source: string;
-  }) => {
-    if (!input.documentId) return;
-
-    try {
-      await workModel.registerDocument({
-        actorAgentId: input.context.actorAgentId,
-        agentDocumentId: input.agentDocumentId,
-        agentId: input.agentId,
-        description: input.description,
-        documentId: input.documentId,
-        role: input.role,
-        rootOperationId: input.context.rootOperationId,
-        source: input.source,
-        sourceMessageId: input.context.sourceMessageId,
-        sourceToolCallId: input.context.sourceToolCallId,
-        threadId: input.context.threadId,
-        topicId: input.context.topicId,
-        url: await buildRegisteredDocumentUrl(input.agentId, input.documentId),
-      });
-    } catch (error) {
-      console.error(
-        `${deps.logPrefix} register document work failed:`,
-        {
-          agentDocumentId: input.agentDocumentId,
-          documentId: input.documentId,
-          rootOperationId: input.context.rootOperationId,
-          sourceToolCallId: input.context.sourceToolCallId,
-        },
-        error,
-      );
-    }
-  };
-
   const deleteDocumentWork = async (input: {
     agentDocumentId?: string | null;
     agentId: string;
@@ -133,7 +85,7 @@ export const createDocumentWorkRegistrar = (deps: {
     }
   };
 
-  return { buildRegisteredDocumentUrl, deleteDocumentWork, registerDocumentWork };
+  return { buildRegisteredDocumentUrl, deleteDocumentWork };
 };
 
 export type DocumentWorkRegistrar = ReturnType<typeof createDocumentWorkRegistrar>;

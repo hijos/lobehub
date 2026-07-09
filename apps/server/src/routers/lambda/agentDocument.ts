@@ -17,10 +17,7 @@ import { TopicDocumentModel } from '@/database/models/topicDocument';
 import { router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
 import { AgentDocumentsService } from '@/server/services/agentDocuments';
-import {
-  createDocumentWorkRegistrar,
-  type DocumentWorkRegistrar,
-} from '@/server/services/agentDocuments/documentWork';
+import { createDocumentWorkRegistrar } from '@/server/services/agentDocuments/documentWork';
 import { emitAgentDocumentToolOutcomeSafely } from '@/server/services/agentDocuments/toolOutcome';
 import { AgentDocumentVfsService } from '@/server/services/agentDocumentVfs';
 import { AgentDocumentVfsError } from '@/server/services/agentDocumentVfs/errors';
@@ -226,37 +223,6 @@ const emitCreateDocumentToolOutcome = async (input: {
     toolCallId: toolContext.toolCallId,
     topicId: input.topicId ?? toolContext.topicId,
     userId: input.userId,
-  });
-};
-
-const registerDocumentWorkFromTool = async (input: {
-  agentDocumentId?: string;
-  agentId: string;
-  description?: string | null;
-  documentId?: string;
-  registrar: DocumentWorkRegistrar;
-  role: 'created' | 'updated';
-  source: string;
-  toolContext?: z.infer<typeof agentDocumentToolContextSchema>;
-  topicId?: string;
-}) => {
-  if (!input.toolContext || !input.documentId) return;
-
-  await input.registrar.registerDocumentWork({
-    agentDocumentId: input.agentDocumentId,
-    agentId: input.agentId,
-    context: {
-      actorAgentId: input.agentId,
-      rootOperationId: input.toolContext.rootOperationId ?? input.toolContext.operationId,
-      sourceMessageId: input.toolContext.toolMessageId ?? input.toolContext.messageId,
-      sourceToolCallId: input.toolContext.toolCallId,
-      threadId: input.toolContext.threadId,
-      topicId: input.topicId ?? input.toolContext.topicId,
-    },
-    description: input.description,
-    documentId: input.documentId,
-    role: input.role,
-    source: input.source,
   });
 };
 
@@ -1039,16 +1005,6 @@ export const agentDocumentRouter = router({
             toolContext: input.toolContext,
             userId: ctx.userId,
           });
-          await registerDocumentWorkFromTool({
-            agentDocumentId: doc?.id,
-            agentId: input.agentId,
-            description: doc?.description,
-            documentId: doc?.documentId,
-            role: 'created',
-            source: 'createDocument',
-            toolContext: input.toolContext,
-            registrar: ctx.documentWorkRegistrar,
-          });
         }
 
         return doc;
@@ -1108,17 +1064,6 @@ export const agentDocumentRouter = router({
             topicId: input.topicId,
             userId: ctx.userId,
           });
-          await registerDocumentWorkFromTool({
-            agentDocumentId: doc?.id,
-            agentId: input.agentId,
-            description: doc?.description,
-            documentId: doc?.documentId,
-            role: 'created',
-            source: 'createForTopic',
-            toolContext: input.toolContext,
-            topicId: input.topicId,
-            registrar: ctx.documentWorkRegistrar,
-          });
         }
 
         return doc;
@@ -1176,18 +1121,6 @@ export const agentDocumentRouter = router({
         input.operations,
         input.agentId,
       );
-      if (input.trigger === 'tool') {
-        await registerDocumentWorkFromTool({
-          agentDocumentId: input.id,
-          agentId: input.agentId,
-          description: doc?.description,
-          documentId: doc?.documentId,
-          role: 'updated',
-          source: 'modifyNodes',
-          toolContext: input.toolContext,
-          registrar: ctx.documentWorkRegistrar,
-        });
-      }
 
       return doc;
     }),
@@ -1211,18 +1144,6 @@ export const agentDocumentRouter = router({
         input.content,
         input.agentId,
       );
-      if (input.trigger === 'tool') {
-        await registerDocumentWorkFromTool({
-          agentDocumentId: input.id,
-          agentId: input.agentId,
-          description: doc?.description,
-          documentId: doc?.documentId,
-          role: 'updated',
-          source: 'replaceDocumentContent',
-          toolContext: input.toolContext,
-          registrar: ctx.documentWorkRegistrar,
-        });
-      }
 
       return doc;
     }),
@@ -1273,18 +1194,6 @@ export const agentDocumentRouter = router({
           input.newTitle,
           input.agentId,
         );
-        if (input.trigger === 'tool') {
-          await registerDocumentWorkFromTool({
-            agentDocumentId: doc?.id,
-            agentId: input.agentId,
-            description: doc?.description,
-            documentId: doc?.documentId,
-            role: 'created',
-            source: 'copyDocument',
-            toolContext: input.toolContext,
-            registrar: ctx.documentWorkRegistrar,
-          });
-        }
 
         return doc;
       } catch (error) {
@@ -1312,18 +1221,6 @@ export const agentDocumentRouter = router({
           input.newTitle,
           input.agentId,
         );
-        if (input.trigger === 'tool') {
-          await registerDocumentWorkFromTool({
-            agentDocumentId: input.id,
-            agentId: input.agentId,
-            description: doc?.description,
-            documentId: doc?.documentId,
-            role: 'updated',
-            source: 'renameDocument',
-            toolContext: input.toolContext,
-            registrar: ctx.documentWorkRegistrar,
-          });
-        }
 
         return doc;
       } catch (error) {

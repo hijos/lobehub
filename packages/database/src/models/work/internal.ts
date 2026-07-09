@@ -25,6 +25,8 @@ export const currentVersions = alias(workVersions, 'current_work_versions');
 export type WorkVersionEventParams = Pick<
   RegisterTaskWorkParams,
   | 'actorAgentId'
+  | 'cumulativeCost'
+  | 'cumulativeUsage'
   | 'role'
   | 'rootOperationId'
   | 'source'

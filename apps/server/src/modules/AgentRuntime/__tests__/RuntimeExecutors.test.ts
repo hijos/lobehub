@@ -135,14 +135,26 @@ vi.mock('@/server/services/file', () => ({
   })),
 }));
 
-const { mockAttachSourceMessage, mockUpdateVersionCumulativeUsage } = vi.hoisted(() => ({
-  mockAttachSourceMessage: vi.fn(),
-  mockUpdateVersionCumulativeUsage: vi.fn(),
+const {
+  mockDeleteDocumentWork,
+  mockDeleteTaskWork,
+  mockHandleSkillToolResult,
+  mockRegisterDocument,
+  mockRegisterTask,
+} = vi.hoisted(() => ({
+  mockDeleteDocumentWork: vi.fn(),
+  mockDeleteTaskWork: vi.fn(),
+  mockHandleSkillToolResult: vi.fn(),
+  mockRegisterDocument: vi.fn(),
+  mockRegisterTask: vi.fn(),
 }));
 vi.mock('@/database/models/work', () => ({
   WorkModel: vi.fn().mockImplementation(() => ({
-    attachSourceMessage: mockAttachSourceMessage,
-    updateVersionCumulativeUsage: mockUpdateVersionCumulativeUsage,
+    deleteDocumentWork: mockDeleteDocumentWork,
+    deleteTaskWork: mockDeleteTaskWork,
+    handleSkillToolResult: mockHandleSkillToolResult,
+    registerDocument: mockRegisterDocument,
+    registerTask: mockRegisterTask,
   })),
 }));
 
@@ -154,10 +166,16 @@ describe('RuntimeExecutors', { timeout: 60_000 }, () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockAttachSourceMessage.mockReset();
-    mockAttachSourceMessage.mockResolvedValue(undefined);
-    mockUpdateVersionCumulativeUsage.mockReset();
-    mockUpdateVersionCumulativeUsage.mockResolvedValue(undefined);
+    mockDeleteTaskWork.mockReset();
+    mockDeleteTaskWork.mockResolvedValue(undefined);
+    mockHandleSkillToolResult.mockReset();
+    mockHandleSkillToolResult.mockResolvedValue(undefined);
+    mockDeleteDocumentWork.mockReset();
+    mockDeleteDocumentWork.mockResolvedValue(undefined);
+    mockRegisterDocument.mockReset();
+    mockRegisterDocument.mockResolvedValue({ id: 'doc-work-1' });
+    mockRegisterTask.mockReset();
+    mockRegisterTask.mockResolvedValue({ id: 'work-1' });
     vi.mocked(initModelRuntimeFromDB).mockReset();
     mockCreateCompressionGroup.mockReset();
     mockFinalizeCompression.mockReset();
@@ -2950,31 +2968,34 @@ describe('RuntimeExecutors', { timeout: 60_000 }, () => {
       );
     });
 
-    it('backfills work version cumulative usage after tool usage is accumulated', async () => {
+    it('registers a Work version once with its cumulative cost from the executor intent', async () => {
       const executors = createRuntimeExecutors(ctx);
-      const state = createMockState({
-        cost: {
-          ...createMockCost(),
-          total: 0.02,
-        },
-        usage: {
-          ...createMockUsage(),
-          llm: {
-            ...createMockUsage().llm,
-            apiCalls: 1,
-            tokens: { input: 1000, output: 200, total: 1200 },
-          },
+      // The executor now hands back a registration intent instead of writing the
+      // Work itself; the runtime persists it after cost is accumulated, stamping
+      // cumulativeCost + provenance (source message = the just-created tool msg).
+      mockToolExecutionService.executeTool.mockResolvedValueOnce({
+        content: 'ok',
+        error: null,
+        executionTime: 100,
+        state: {},
+        success: true,
+        workRegistration: {
+          action: 'create',
+          role: 'created',
+          targets: [{ taskId: 'task_x', taskIdentifier: 'T-X' }],
+          type: 'task',
         },
       });
+      const state = createMockState({ cost: { ...createMockCost(), total: 0.02 } });
 
       const instruction = {
         payload: {
-          parentMessageId: 'assistant-msg-usage',
+          parentMessageId: 'assistant-msg-intent',
           toolCalling: {
-            apiName: 'search',
-            arguments: '{"query": "test"}',
-            id: 'tool-call-usage',
-            identifier: 'lobe-web-browsing',
+            apiName: 'createTask',
+            arguments: '{"name":"A"}',
+            id: 'tool-call-intent',
+            identifier: 'lobe-task',
             type: 'builtin' as const,
           },
         },
@@ -2983,21 +3004,18 @@ describe('RuntimeExecutors', { timeout: 60_000 }, () => {
 
       await executors.call_tool!(instruction, state);
 
-      expect(mockUpdateVersionCumulativeUsage).toHaveBeenCalledWith(
+      expect(mockRegisterTask).toHaveBeenCalledWith(
         expect.objectContaining({
           cumulativeCost: 0.02,
           cumulativeUsage: expect.objectContaining({
             cost: expect.objectContaining({ total: 0.02 }),
-            usage: expect.objectContaining({
-              llm: expect.objectContaining({
-                apiCalls: 1,
-                tokens: { input: 1000, output: 200, total: 1200 },
-              }),
-              tools: expect.objectContaining({ totalCalls: 1 }),
-            }),
           }),
-          rootOperationId: 'op-123',
-          sourceToolCallId: 'tool-call-usage',
+          role: 'created',
+          source: 'createTask',
+          sourceMessageId: 'msg-123',
+          sourceToolCallId: 'tool-call-intent',
+          taskId: 'task_x',
+          taskIdentifier: 'T-X',
         }),
       );
     });
@@ -3658,7 +3676,34 @@ describe('RuntimeExecutors', { timeout: 60_000 }, () => {
       );
     });
 
-    it('backfills each batch tool work version with its own cumulative usage snapshot', async () => {
+    it('registers each batch tool Work version once with its own cumulative cost + provenance', async () => {
+      // Each executor result carries a task registration intent; the batch
+      // persists it ONCE per tool, stamping that call's cumulative cost and the
+      // just-created tool message as the source — no cost-less insert + backfill.
+      mockToolExecutionService.executeTool.mockImplementation((payload: any) =>
+        Promise.resolve({
+          content: 'ok',
+          error: null,
+          executionTime: 100,
+          state: {},
+          success: true,
+          workRegistration:
+            payload.id === 'tool-call-1'
+              ? {
+                  action: 'create',
+                  role: 'created',
+                  targets: [{ taskId: 'task_1', taskIdentifier: 'T-1' }],
+                  type: 'task',
+                }
+              : {
+                  action: 'update',
+                  role: 'updated',
+                  targets: [{ taskId: 'task_2', taskIdentifier: 'T-2' }],
+                  type: 'task',
+                },
+        }),
+      );
+
       const executors = createRuntimeExecutors(ctx);
       const state = createMockState();
 
@@ -3667,17 +3712,17 @@ describe('RuntimeExecutors', { timeout: 60_000 }, () => {
           parentMessageId: 'assistant-msg-123',
           toolsCalling: [
             {
-              apiName: 'search',
-              arguments: '{"query": "test1"}',
+              apiName: 'createTask',
+              arguments: '{"name":"A"}',
               id: 'tool-call-1',
-              identifier: 'lobe-web-browsing',
+              identifier: 'lobe-task',
               type: 'default' as const,
             },
             {
-              apiName: 'crawl',
-              arguments: '{"url": "https://example.com"}',
+              apiName: 'updateTask',
+              arguments: '{"name":"B"}',
               id: 'tool-call-2',
-              identifier: 'lobe-web-browsing',
+              identifier: 'lobe-task',
               type: 'default' as const,
             },
           ],
@@ -3687,25 +3732,27 @@ describe('RuntimeExecutors', { timeout: 60_000 }, () => {
 
       await executors.call_tools_batch!(instruction, state);
 
-      expect(mockUpdateVersionCumulativeUsage).toHaveBeenCalledTimes(2);
-      expect(mockUpdateVersionCumulativeUsage.mock.calls.map(([params]) => params)).toEqual([
-        expect.objectContaining({
-          cumulativeUsage: expect.objectContaining({
-            usage: expect.objectContaining({
-              tools: expect.objectContaining({ totalCalls: 1 }),
-            }),
+      expect(mockRegisterTask).toHaveBeenCalledTimes(2);
+      const registerCalls = mockRegisterTask.mock.calls.map(([params]) => params);
+      expect(registerCalls).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            cumulativeUsage: expect.objectContaining({ cost: expect.any(Object) }),
+            role: 'created',
+            source: 'createTask',
+            sourceMessageId: expect.stringMatching(/^tool-msg-/),
+            sourceToolCallId: 'tool-call-1',
+            taskId: 'task_1',
           }),
-          sourceToolCallId: 'tool-call-1',
-        }),
-        expect.objectContaining({
-          cumulativeUsage: expect.objectContaining({
-            usage: expect.objectContaining({
-              tools: expect.objectContaining({ totalCalls: 2 }),
-            }),
+          expect.objectContaining({
+            role: 'updated',
+            source: 'updateTask',
+            sourceMessageId: expect.stringMatching(/^tool-msg-/),
+            sourceToolCallId: 'tool-call-2',
+            taskId: 'task_2',
           }),
-          sourceToolCallId: 'tool-call-2',
-        }),
-      ]);
+        ]),
+      );
     });
 
     it('should apply retry policy per tool in batch mode', async () => {

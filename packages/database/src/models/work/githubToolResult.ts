@@ -240,6 +240,8 @@ const buildParams = (
       hasAnyKey(record, ['created_at', 'createdAt']),
       fromRecord(record, ['created_at', 'createdAt']),
     ),
+    cumulativeCost: params.cumulativeCost ?? null,
+    cumulativeUsage: params.cumulativeUsage ?? null,
     draft: patch('draft', typeof record.draft === 'boolean', record.draft as boolean),
     headRef: patch(
       'headRef',
@@ -632,6 +634,8 @@ const normalizeGithubCliResult = (
       actorAgentId: params.actorAgentId ?? null,
       baseRef: patch('baseRef', parsed.baseRef !== null, parsed.baseRef),
       body: patch('body', parsed.body !== null, snapshotText(parsed.body)),
+      cumulativeCost: params.cumulativeCost ?? null,
+      cumulativeUsage: params.cumulativeUsage ?? null,
       // gh only exposes --draft on create; an edit can't flip draft state.
       draft: patch('draft', parsed.action === 'create' && parsed.draft, true),
       headRef: patch('headRef', parsed.headRef !== null, parsed.headRef),

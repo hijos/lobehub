@@ -11,6 +11,7 @@ import { workService } from '@/services/work';
 import { useAgentStore } from '@/store/agent';
 import { useElectronStore } from '@/store/electron';
 import { electronSyncSelectors } from '@/store/electron/selectors';
+import { stashWorkIntent } from '@/utils/clientWorkIntentStash';
 
 interface DocumentWorkRefreshContext {
   operationId?: string;
@@ -27,6 +28,12 @@ const getAppOrigin = (): string | undefined => {
   if (isDesktop) return electronSyncSelectors.remoteServerUrl(useElectronStore.getState());
   return typeof window === 'undefined' ? undefined : window.location.origin;
 };
+
+/** Build the sharable document URL for the active workspace (stash intent + tool result share both use it). */
+const buildDocumentShareUrl = (agentId: string, documentId: string): string | undefined =>
+  buildAgentDocumentUrl(getAppOrigin(), agentId, documentId, {
+    workspaceSlug: getActiveWorkspaceSlug(),
+  });
 
 const refreshDocumentWorks = async (context?: DocumentWorkRefreshContext) => {
   if (!context) return;
@@ -46,26 +53,84 @@ const withWorkRefresh = async <T>(operation: Promise<T>, context?: DocumentWorkR
   return result;
 };
 
+/**
+ * Stash a document Work-registration intent for a create/update tool mutation,
+ * keyed by `toolCallId`. `call_tool` drains it and registers the Work ONCE the
+ * tool call's cumulative cost is known — replacing the old lambda-side inline
+ * (cost-less) registration + client cost back-fill. Deletes are NOT stashed:
+ * they remain a lambda side-effect of removeDocument (a delete carries no cost).
+ *
+ * The share URL is resolved here (the client already builds it for the tool
+ * result), so the lambda register endpoint stays a thin passthrough.
+ */
+const stashDocumentRegisterIntent = (input: {
+  agentDocumentId?: string;
+  agentId: string;
+  description?: string | null;
+  documentId?: string;
+  role: 'created' | 'updated';
+  source: string;
+  toolCallId?: string;
+}) => {
+  if (!input.toolCallId || !input.documentId) return;
+
+  stashWorkIntent(input.toolCallId, {
+    action: 'register',
+    document: {
+      agentDocumentId: input.agentDocumentId,
+      agentId: input.agentId,
+      description: input.description,
+      documentId: input.documentId,
+      role: input.role,
+      source: input.source,
+      url: buildDocumentShareUrl(input.agentId, input.documentId),
+    },
+    type: 'document',
+  });
+};
+
 const runtime = new AgentDocumentsExecutionRuntime(
   {
-    copyDocument: ({ agentId, id, newTitle, toolContext, trigger }) =>
-      withWorkRefresh(
-        agentDocumentService.copyDocument({ agentId, id, newTitle, toolContext, trigger }),
+    copyDocument: async ({ agentId, id, newTitle, toolContext, trigger }) => {
+      const doc = await agentDocumentService.copyDocument({
+        agentId,
+        id,
+        newTitle,
         toolContext,
-      ),
-    createDocument: ({ agentId, content, hintIsSkill, title, toolContext, trigger }) =>
-      withWorkRefresh(
-        agentDocumentService.createDocument({
-          agentId,
-          content,
-          hintIsSkill,
-          title,
-          toolContext,
-          trigger,
-        }),
+        trigger,
+      });
+      stashDocumentRegisterIntent({
+        agentDocumentId: doc?.id,
+        agentId,
+        description: doc?.description,
+        documentId: doc?.documentId,
+        role: 'created',
+        source: 'copyDocument',
+        toolCallId: toolContext?.toolCallId,
+      });
+      return doc;
+    },
+    createDocument: async ({ agentId, content, hintIsSkill, title, toolContext, trigger }) => {
+      const doc = await agentDocumentService.createDocument({
+        agentId,
+        content,
+        hintIsSkill,
+        title,
         toolContext,
-      ),
-    createTopicDocument: ({
+        trigger,
+      });
+      stashDocumentRegisterIntent({
+        agentDocumentId: doc?.id,
+        agentId,
+        description: doc?.description,
+        documentId: doc?.documentId,
+        role: 'created',
+        source: 'createDocument',
+        toolCallId: toolContext?.toolCallId,
+      });
+      return doc;
+    },
+    createTopicDocument: async ({
       agentId,
       content,
       hintIsSkill,
@@ -73,19 +138,27 @@ const runtime = new AgentDocumentsExecutionRuntime(
       toolContext,
       topicId,
       trigger,
-    }) =>
-      withWorkRefresh(
-        agentDocumentService.createForTopic({
-          agentId,
-          content,
-          hintIsSkill,
-          title,
-          toolContext,
-          topicId,
-          trigger,
-        }),
+    }) => {
+      const doc = await agentDocumentService.createForTopic({
+        agentId,
+        content,
+        hintIsSkill,
+        title,
         toolContext,
-      ),
+        topicId,
+        trigger,
+      });
+      stashDocumentRegisterIntent({
+        agentDocumentId: doc?.id,
+        agentId,
+        description: doc?.description,
+        documentId: doc?.documentId,
+        role: 'created',
+        source: 'createForTopic',
+        toolCallId: toolContext?.toolCallId,
+      });
+      return doc;
+    },
     listDocuments: async ({ agentId, parentId, sourceType }) => {
       // The agent listing tool surfaces archived `.tool-results` so the model can
       // discover them; user-facing lists keep the default (filtered) behavior.
@@ -118,13 +191,30 @@ const runtime = new AgentDocumentsExecutionRuntime(
         title: d.title,
       }));
     },
-    modifyNodes: ({ agentId, id, operations, toolContext, trigger }) =>
-      withWorkRefresh(
-        agentDocumentService.modifyNodes({ agentId, id, operations, toolContext, trigger }),
+    modifyNodes: async ({ agentId, id, operations, toolContext, trigger }) => {
+      const doc = await agentDocumentService.modifyNodes({
+        agentId,
+        id,
+        operations,
         toolContext,
-      ),
+        trigger,
+      });
+      stashDocumentRegisterIntent({
+        agentDocumentId: id,
+        agentId,
+        description: doc?.description,
+        documentId: doc?.documentId,
+        role: 'updated',
+        source: 'modifyNodes',
+        toolCallId: toolContext?.toolCallId,
+      });
+      return doc;
+    },
     readDocument: ({ agentId, format, id }) =>
       agentDocumentService.readDocument({ agentId, format: format ?? 'xml', id }),
+    // Delete stays a lambda side-effect (removeDocument drops the Work server-side);
+    // it carries no cost, so it needs no cost-stamping defer. Keep the immediate
+    // work-cache refresh so the sidebar drops the removed doc.
     removeDocument: async ({ agentId, id, toolContext, trigger }) =>
       (
         await withWorkRefresh(
@@ -132,16 +222,44 @@ const runtime = new AgentDocumentsExecutionRuntime(
           toolContext,
         )
       ).deleted,
-    renameDocument: ({ agentId, id, newTitle, toolContext, trigger }) =>
-      withWorkRefresh(
-        agentDocumentService.renameDocument({ agentId, id, newTitle, toolContext, trigger }),
+    renameDocument: async ({ agentId, id, newTitle, toolContext, trigger }) => {
+      const doc = await agentDocumentService.renameDocument({
+        agentId,
+        id,
+        newTitle,
         toolContext,
-      ),
-    replaceDocumentContent: ({ agentId, content, id, toolContext, trigger }) =>
-      withWorkRefresh(
-        agentDocumentService.replaceDocumentContent({ agentId, content, id, toolContext, trigger }),
+        trigger,
+      });
+      stashDocumentRegisterIntent({
+        agentDocumentId: id,
+        agentId,
+        description: doc?.description,
+        documentId: doc?.documentId,
+        role: 'updated',
+        source: 'renameDocument',
+        toolCallId: toolContext?.toolCallId,
+      });
+      return doc;
+    },
+    replaceDocumentContent: async ({ agentId, content, id, toolContext, trigger }) => {
+      const doc = await agentDocumentService.replaceDocumentContent({
+        agentId,
+        content,
+        id,
         toolContext,
-      ),
+        trigger,
+      });
+      stashDocumentRegisterIntent({
+        agentDocumentId: id,
+        agentId,
+        description: doc?.description,
+        documentId: doc?.documentId,
+        role: 'updated',
+        source: 'replaceDocumentContent',
+        toolCallId: toolContext?.toolCallId,
+      });
+      return doc;
+    },
     updateLoadRule: ({ agentId, id, rule }) =>
       agentDocumentService.updateLoadRule({
         agentId,
@@ -154,10 +272,7 @@ const runtime = new AgentDocumentsExecutionRuntime(
       }),
   },
   {
-    getDocumentUrl: ({ agentId, documentId }) =>
-      buildAgentDocumentUrl(getAppOrigin(), agentId, documentId, {
-        workspaceSlug: getActiveWorkspaceSlug(),
-      }),
+    getDocumentUrl: ({ agentId, documentId }) => buildDocumentShareUrl(agentId, documentId),
     // Revalidate the documents list after the agent mutates it. `onAfterCall`
     // carries no agentId, so resolve the active chat agent — the one whose run
     // just produced the tool call. Covers the server-runtime path where the

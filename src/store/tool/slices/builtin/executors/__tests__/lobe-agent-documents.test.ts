@@ -1,6 +1,8 @@
 import type { BuiltinToolContext } from '@lobechat/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { takeWorkIntent } from '@/utils/clientWorkIntentStash';
+
 import { agentDocumentsExecutor } from '../lobe-agent-documents';
 
 const mocks = vi.hoisted(() => ({
@@ -62,10 +64,13 @@ describe('agentDocumentsExecutor', () => {
     vi.clearAllMocks();
     mocks.refreshConversation.mockResolvedValue(undefined);
     mocks.refreshRootOperation.mockResolvedValue(undefined);
+    // Drain any leftover so the shared per-toolCallId stash starts clean.
+    takeWorkIntent('tool-call-1');
   });
 
-  it('refreshes conversation and root operation works after attributed document creation', async () => {
+  it('stashes a document register intent after attributed document creation', async () => {
     mocks.createDocument.mockResolvedValue({
+      description: 'A daily brief',
       documentId: 'document-1',
       id: 'agent-document-1',
       title: 'Test Document',
@@ -97,7 +102,23 @@ describe('agentDocumentsExecutor', () => {
         trigger: 'tool',
       }),
     );
-    expect(mocks.refreshConversation).toHaveBeenCalledWith('topic-1', 'thread-1');
-    expect(mocks.refreshRootOperation).toHaveBeenCalledWith('root-operation-1');
+
+    // The wrapper no longer refreshes inline; it stashes the register intent for
+    // `call_tool` to write once cost is known.
+    expect(mocks.refreshConversation).not.toHaveBeenCalled();
+    expect(takeWorkIntent('tool-call-1')).toEqual(
+      expect.objectContaining({
+        action: 'register',
+        document: expect.objectContaining({
+          agentDocumentId: 'agent-document-1',
+          agentId: 'agent-1',
+          description: 'A daily brief',
+          documentId: 'document-1',
+          role: 'created',
+          source: 'createDocument',
+        }),
+        type: 'document',
+      }),
+    );
   });
 });

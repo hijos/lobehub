@@ -1,7 +1,7 @@
 import type {
+  RegisterDocumentWorkParams,
   RegisterSkillToolResultWorkParams,
   RegisterTaskWorkParams,
-  UpdateWorkVersionCumulativeUsageParams,
   WorkItem,
   WorkListItem,
   WorkSummaryItem,
@@ -49,6 +49,9 @@ class WorkService {
   registerTask = async (params: RegisterTaskWorkParams): Promise<WorkItem | null> =>
     lambdaClient.work.registerTask.mutate(params);
 
+  registerDocument = async (params: RegisterDocumentWorkParams): Promise<WorkItem | null> =>
+    lambdaClient.work.registerDocument.mutate(params);
+
   deleteTaskWork = async (params: { taskId: string }): Promise<void> =>
     lambdaClient.work.deleteTaskWork.mutate(params);
 
@@ -65,13 +68,6 @@ class WorkService {
     ]);
 
     return work;
-  };
-
-  updateVersionCumulativeUsage = async (
-    params: UpdateWorkVersionCumulativeUsageParams,
-  ): Promise<void> => {
-    await lambdaClient.work.updateVersionCumulativeUsage.mutate(params);
-    await this.refreshRootOperation(params.rootOperationId);
   };
 
   refreshConversation = async (topicId?: string | null, threadId?: string | null) => {

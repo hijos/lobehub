@@ -10,7 +10,6 @@ import WorkSummaryCard from '@/features/AgentTasks/features/WorkSummaryCard';
 import { useClientDataSWR } from '@/libs/swr';
 import { workKeys } from '@/libs/swr/keys';
 import { workService } from '@/services/work';
-import { getWorkSummaryCostRefreshInterval } from '@/utils/workVersionCost';
 
 import { dataSelectors, useConversationStore } from '../../store';
 
@@ -37,7 +36,6 @@ const MessageWorks = memo<MessageWorksProps>(({ rootOperationId }) => {
     () => workService.listSummariesByRootOperations({ rootOperationIds }),
     {
       fallbackData: {},
-      refreshInterval: getWorkSummaryCostRefreshInterval,
       revalidateOnFocus: false,
     },
   );

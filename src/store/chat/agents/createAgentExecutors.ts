@@ -7,7 +7,6 @@ import type {
   AgentInstructionExecSubAgent,
   AgentInstructionExecSubAgents,
   AgentRuntimeContext,
-  AgentState,
   GeneralAgentCallingToolInstructionPayload,
   GeneralAgentCallLLMInstructionPayload,
   GeneralAgentCallLLMResultPayload,
@@ -40,13 +39,13 @@ import { aiAgentService } from '@/services/aiAgent';
 import { chatService } from '@/services/chat';
 import { type ResolvedAgentConfig } from '@/services/chat/mecha';
 import { messageService } from '@/services/message';
-import { workService } from '@/services/work';
 import { type ChatStore } from '@/store/chat/store';
 import { getCompressionCandidateMessageIds } from '@/store/chat/utils/compression';
 import { getFileStoreState } from '@/store/file/store';
+import { takeWorkIntent } from '@/utils/clientWorkIntentStash';
 import { sleep } from '@/utils/sleep';
-import { buildWorkVersionCumulativeUsage } from '@/utils/workCumulativeUsage';
 
+import { registerClientWorkFromIntent } from './registerClientWorkFromIntent';
 import { StreamingHandler } from './StreamingHandler';
 import { type StreamChunk } from './types/streaming';
 
@@ -56,28 +55,6 @@ const log = debug('lobe-store:agent-executors');
 const TOOL_PRICING: Record<string, number> = {
   'lobe-web-browsing/craw': 0.002,
   'lobe-web-browsing/search': 0.001,
-};
-
-const updateWorkVersionCumulativeUsage = async ({
-  rootOperationId,
-  sourceToolCallId,
-  state,
-}: {
-  rootOperationId?: string;
-  sourceToolCallId?: string;
-  state: Pick<AgentState, 'cost' | 'usage'>;
-}) => {
-  if (!rootOperationId || !sourceToolCallId) return;
-
-  try {
-    await workService.updateVersionCumulativeUsage({
-      rootOperationId,
-      sourceToolCallId,
-      ...buildWorkVersionCumulativeUsage({ cost: state.cost, usage: state.usage }),
-    });
-  } catch (error) {
-    log('updateWorkVersionCumulativeUsage failed for toolCallId=%s: %O', sourceToolCallId, error);
-  }
 };
 
 const isAbortError = (error: unknown, abortController?: AbortController) =>
@@ -977,6 +954,14 @@ export const createAgentExecutors = (context: {
             runtimeContext?.stepContext,
           );
 
+        // Drain the Work-registration intent stashed during tool execution
+        // (task / skill / document) right after the call returns. Draining here —
+        // before the aborted/no-result early-returns below — guarantees the
+        // per-`toolCallId` stash entry is always freed, even when the tool is
+        // cancelled or yields no result (those paths return without registering).
+        // The actual write happens later, once the cumulative cost is known.
+        const workIntent = takeWorkIntent(chatToolPayload.id);
+
         // Check if operation was cancelled during tool execution
         const executeToolOperation = context.get().operations[executeToolOpId];
         if (executeToolOperation?.abortController.signal.aborted) {
@@ -1055,16 +1040,24 @@ export const createAgentExecutors = (context: {
         newState.usage = usage;
         if (cost) newState.cost = cost;
 
-        // Best-effort bookkeeping (errors are swallowed inside the helper, and
-        // the args are captured synchronously) — fire without awaiting so every
-        // client tool call doesn't pay a network round trip + SWR revalidation
-        // before the agent can move to its next step. Matches the other Work
-        // call sites (gatewayEventHandler / plugin exector) which don't block.
-        void updateWorkVersionCumulativeUsage({
-          rootOperationId: context.operationId,
-          sourceToolCallId: chatToolPayload.id,
-          state: newState,
-        });
+        // Write the Work version ONCE now that the tool call's cumulative cost is
+        // known — write-once instead of register-cost-less-then-backfill. Fire
+        // without awaiting so the agent's next step doesn't pay the register round
+        // trip + SWR revalidation. (`workIntent` was drained right after the tool
+        // returned, above.)
+        if (workIntent) {
+          void registerClientWorkFromIntent({
+            actorAgentId: opContext.agentId,
+            intent: workIntent,
+            rootOperationId: context.operationId,
+            sourceMessageId: toolMessageId,
+            sourceToolCallId: chatToolPayload.id,
+            sourceToolName: chatToolPayload.apiName,
+            state: newState,
+            threadId: opContext.threadId,
+            topicId: opContext.topicId ?? undefined,
+          });
+        }
 
         // Find current tool statistics
         const currentToolStats = usage.tools.byTool.find((t) => t.name === toolName);

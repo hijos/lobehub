@@ -1,7 +1,7 @@
 import type {
+  RegisterDocumentWorkParams,
   RegisterSkillToolResultWorkParams,
   RegisterTaskWorkParams,
-  UpdateWorkVersionCumulativeUsageParams,
   WorkVersionCumulativeUsage,
 } from '@lobechat/types';
 import { z } from 'zod';
@@ -59,12 +59,23 @@ const cumulativeUsageSchema = z.object({
   usage: z.unknown().optional(),
 }) satisfies z.ZodType<WorkVersionCumulativeUsage>;
 
-const updateVersionCumulativeUsageSchema = z.object({
+const registerDocumentSchema = z.object({
+  actorAgentId: z.string().nullable().optional(),
+  agentDocumentId: z.string().nullable().optional(),
+  agentId: z.string().nullable().optional(),
   cumulativeCost: z.number().nullable().optional(),
   cumulativeUsage: cumulativeUsageSchema.nullable().optional(),
+  description: z.string().nullable().optional(),
+  documentId: z.string().min(1),
+  role: versionRoleSchema,
   rootOperationId: z.string().nullable().optional(),
+  source: z.string().min(1),
+  sourceMessageId: z.string().nullable().optional(),
   sourceToolCallId: z.string().nullable().optional(),
-}) satisfies z.ZodType<UpdateWorkVersionCumulativeUsageParams>;
+  threadId: z.string().nullable().optional(),
+  topicId: z.string().nullable().optional(),
+  url: z.string().nullable().optional(),
+}) satisfies z.ZodType<RegisterDocumentWorkParams>;
 
 export const workRouter = router({
   listByConversation: workProcedure
@@ -141,11 +152,11 @@ export const workRouter = router({
     .input(registerTaskSchema)
     .mutation(async ({ ctx, input }) => ctx.workModel.registerTask(input)),
 
+  registerDocument: workProcedureWrite
+    .input(registerDocumentSchema)
+    .mutation(async ({ ctx, input }) => ctx.workModel.registerDocument(input)),
+
   handleSkillToolResult: workProcedureWrite
     .input(registerSkillToolResultSchema)
     .mutation(async ({ ctx, input }) => ctx.workModel.handleSkillToolResult(input)),
-
-  updateVersionCumulativeUsage: workProcedureWrite
-    .input(updateVersionCumulativeUsageSchema)
-    .mutation(async ({ ctx, input }) => ctx.workModel.updateVersionCumulativeUsage(input)),
 });

@@ -103,7 +103,7 @@ describe('WorkModel · task', () => {
     expect(byOperations['op-missing']).toEqual([]);
   });
 
-  it('updates cumulative usage for the version produced by a tool call', async () => {
+  it('writes cumulativeCost only on the version that carried it at insert time', async () => {
     const taskModel = new TaskModel(serverDB, userId);
     const workModel = new WorkModel(serverDB, userId);
     const firstTask = await taskModel.create({
@@ -115,7 +115,16 @@ describe('WorkModel · task', () => {
       name: 'Second work',
     });
 
+    // The agent runtime stamps each register call with its own tool-call cost,
+    // so only the version registered with cost carries it — a sibling version
+    // registered cost-less stays null (no shared backfill spills over).
     const firstWork = await workModel.registerTask({
+      cumulativeCost: 0.03,
+      cumulativeUsage: {
+        capturedAt: '2026-06-30T08:00:00.000Z',
+        cost: { total: 0.03 },
+        usage: { llm: { tokens: { input: 1200, output: 300, total: 1500 } } },
+      },
       role: 'created',
       rootOperationId: 'op-cumulative',
       source: 'createTask',
@@ -130,17 +139,6 @@ describe('WorkModel · task', () => {
       sourceToolCallId: 'tool-call-second',
       taskId: secondTask.id,
       topicId,
-    });
-
-    await workModel.updateVersionCumulativeUsage({
-      cumulativeCost: 0.03,
-      cumulativeUsage: {
-        capturedAt: '2026-06-30T08:00:00.000Z',
-        cost: { total: 0.03 },
-        usage: { llm: { tokens: { input: 1200, output: 300, total: 1500 } } },
-      },
-      rootOperationId: 'op-cumulative',
-      sourceToolCallId: 'tool-call-first',
     });
 
     const [firstVersion] = await serverDB
@@ -163,6 +161,37 @@ describe('WorkModel · task', () => {
     const byOperation = await workModel.listByRootOperation({ rootOperationId: 'op-cumulative' });
     const firstOperationWork = byOperation.find((item) => item.id === firstWork!.id);
     expect(firstOperationWork?.version.cumulativeCost).toBe(0.03);
+  });
+
+  it('writes cumulativeCost/cumulativeUsage at insert time when registered with cost', async () => {
+    const taskModel = new TaskModel(serverDB, userId);
+    const workModel = new WorkModel(serverDB, userId);
+    const task = await taskModel.create({ instruction: 'Insert cost', name: 'Insert cost' });
+
+    // The agent runtime now stamps the cumulative cost onto the register call,
+    // so the version row lands with its cost instead of being back-filled.
+    const work = await workModel.registerTask({
+      cumulativeCost: 0.042,
+      cumulativeUsage: {
+        capturedAt: '2026-07-08T08:00:00.000Z',
+        cost: { total: 0.042 },
+        usage: { llm: { tokens: { input: 900, output: 100, total: 1000 } } },
+      },
+      role: 'created',
+      rootOperationId: 'op-insert-cost',
+      source: 'createTask',
+      sourceToolCallId: 'tool-call-insert-cost',
+      taskId: task.id,
+      topicId,
+    });
+
+    const [version] = await serverDB
+      .select()
+      .from(workVersions)
+      .where(eq(workVersions.workId, work!.id));
+
+    expect(version.cumulativeCost).toBe(0.042);
+    expect(version.cumulativeUsage).toMatchObject({ cost: { total: 0.042 } });
   });
 
   it('keeps one work row and appends versions for task edits', async () => {
@@ -195,14 +224,10 @@ describe('WorkModel · task', () => {
       role: 'updated',
       rootOperationId: 'op-edit',
       source: 'editTask',
+      sourceMessageId: 'msg-tool-edit',
       sourceToolCallId: 'tool-call-edit',
       taskIdentifier: task.identifier,
       topicId,
-    });
-    await workModel.attachSourceMessage({
-      rootOperationId: 'op-edit',
-      sourceMessageId: 'msg-tool-edit',
-      sourceToolCallId: 'tool-call-edit',
     });
 
     expect(second?.id).toBe(first?.id);
@@ -234,6 +259,7 @@ describe('WorkModel · task', () => {
     });
 
     const first = await workModel.registerTask({
+      cumulativeCost: 0.000_295,
       role: 'created',
       rootOperationId: 'op-summary-create',
       source: 'createTask',
@@ -249,6 +275,7 @@ describe('WorkModel · task', () => {
     });
 
     await workModel.registerTask({
+      cumulativeCost: 0.000_692,
       role: 'updated',
       rootOperationId: 'op-summary-edit',
       source: 'editTask',
@@ -258,45 +285,22 @@ describe('WorkModel · task', () => {
     });
     await taskModel.update(task.id, { description: 'Live task description after snapshot' });
 
-    const pendingByOperation = await workModel.listSummariesByRootOperations({
-      rootOperationIds: ['op-summary-create', 'op-summary-edit'],
-    });
-    expect(pendingByOperation['op-summary-create']).toEqual([]);
-    expect(pendingByOperation['op-summary-edit']).toHaveLength(1);
-    const pendingSummary = expectTaskSummaryItem(pendingByOperation['op-summary-edit']?.[0]);
-    expect(pendingSummary).toMatchObject({
-      event: expect.objectContaining({ role: 'updated', rootOperationId: 'op-summary-edit' }),
-      id: first?.id,
-      task: expect.objectContaining({ name: 'Updated title' }),
-      totalCost: null,
-      version: expect.objectContaining({ version: 2 }),
-    });
-    // Summary description comes from the current version snapshot, not the live task row.
-    expect(pendingSummary.task.description).toBe('Updated description');
-
-    await workModel.updateVersionCumulativeUsage({
-      cumulativeCost: 0.000_295,
-      rootOperationId: 'op-summary-create',
-      sourceToolCallId: 'tool-call-summary-create',
-    });
-
-    const partialCostByOperation = await workModel.listSummariesByRootOperations({
-      rootOperationIds: ['op-summary-create', 'op-summary-edit'],
-    });
-    expect(partialCostByOperation['op-summary-edit']?.[0].totalCost).toBeCloseTo(0.000_295, 6);
-
-    await workModel.updateVersionCumulativeUsage({
-      cumulativeCost: 0.000_692,
-      rootOperationId: 'op-summary-edit',
-      sourceToolCallId: 'tool-call-summary-edit',
-    });
-
     const byOperation = await workModel.listSummariesByRootOperations({
       rootOperationIds: ['op-summary-create', 'op-summary-edit'],
     });
     expect(byOperation['op-summary-create']).toEqual([]);
     expect(byOperation['op-summary-edit']).toHaveLength(1);
-    expect(byOperation['op-summary-edit']?.[0].totalCost).toBeCloseTo(0.000_987, 6);
+    const summary = expectTaskSummaryItem(byOperation['op-summary-edit']?.[0]);
+    expect(summary).toMatchObject({
+      event: expect.objectContaining({ role: 'updated', rootOperationId: 'op-summary-edit' }),
+      id: first?.id,
+      task: expect.objectContaining({ name: 'Updated title' }),
+      version: expect.objectContaining({ version: 2 }),
+    });
+    // Cost is written once at insert time and summed across the two operations.
+    expect(summary.totalCost).toBeCloseTo(0.000_987, 6);
+    // Summary description comes from the current version snapshot, not the live task row.
+    expect(summary.task.description).toBe('Updated description');
 
     const byConversation = await workModel.listSummariesByConversation({ topicId });
     expect(byConversation).toHaveLength(1);
@@ -313,7 +317,12 @@ describe('WorkModel · task', () => {
     const workModel = new WorkModel(serverDB, userId);
     const task = await taskModel.create({ instruction: 'Cost', name: 'Cost task' });
 
+    // cumulativeCost is the operation's running total written once at insert
+    // time: the edit's 0.016 already contains the create's 0.01 (same
+    // operation), so the work's total is 0.016 + 0.005, not the 0.031 sum of
+    // all three snapshots.
     await workModel.registerTask({
+      cumulativeCost: 0.01,
       role: 'created',
       rootOperationId: 'op-cost-same',
       source: 'createTask',
@@ -322,6 +331,7 @@ describe('WorkModel · task', () => {
       topicId,
     });
     await workModel.registerTask({
+      cumulativeCost: 0.016,
       role: 'updated',
       rootOperationId: 'op-cost-same',
       source: 'editTask',
@@ -330,31 +340,13 @@ describe('WorkModel · task', () => {
       topicId,
     });
     await workModel.registerTask({
+      cumulativeCost: 0.005,
       role: 'updated',
       rootOperationId: 'op-cost-other',
       source: 'editTask',
       sourceToolCallId: 'tool-call-cost-other',
       taskId: task.id,
       topicId,
-    });
-
-    // cumulativeCost is the operation's running total: the edit's 0.016
-    // already contains the create's 0.01 (same operation), so the work's
-    // total is 0.016 + 0.005, not the 0.031 sum of all three snapshots.
-    await workModel.updateVersionCumulativeUsage({
-      cumulativeCost: 0.01,
-      rootOperationId: 'op-cost-same',
-      sourceToolCallId: 'tool-call-cost-create',
-    });
-    await workModel.updateVersionCumulativeUsage({
-      cumulativeCost: 0.016,
-      rootOperationId: 'op-cost-same',
-      sourceToolCallId: 'tool-call-cost-edit',
-    });
-    await workModel.updateVersionCumulativeUsage({
-      cumulativeCost: 0.005,
-      rootOperationId: 'op-cost-other',
-      sourceToolCallId: 'tool-call-cost-other',
     });
 
     const summaries = await workModel.listSummariesByRootOperations({

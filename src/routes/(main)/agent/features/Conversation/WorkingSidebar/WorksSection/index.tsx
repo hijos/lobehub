@@ -25,11 +25,7 @@ import { useClientDataSWR } from '@/libs/swr';
 import { workKeys } from '@/libs/swr/keys';
 import { workService } from '@/services/work';
 import { useChatStore } from '@/store/chat';
-import {
-  formatWorkVersionCost,
-  getWorkSummaryCostRefreshInterval,
-  getWorkVersionCostRefreshInterval,
-} from '@/utils/workVersionCost';
+import { formatWorkVersionCost } from '@/utils/workVersionCost';
 
 const TASK_STATUS_SET = new Set<TaskStatus>([
   'backlog',
@@ -115,7 +111,6 @@ const VersionList = memo<{ workId: string }>(({ workId }) => {
     () => workService.listVersions(workId),
     {
       fallbackData: [],
-      refreshInterval: getWorkVersionCostRefreshInterval,
       revalidateOnFocus: false,
     },
   );
@@ -325,7 +320,6 @@ const WorksSection = memo(() => {
     () => workService.listSummariesByConversation({ threadId, topicId }),
     {
       fallbackData: [],
-      refreshInterval: getWorkSummaryCostRefreshInterval,
       revalidateOnFocus: false,
     },
   );

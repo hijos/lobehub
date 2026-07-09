@@ -6,7 +6,6 @@ import type {
   RegisterLinearWorkParams,
   RegisterSkillToolResultWorkParams,
   RegisterTaskWorkParams,
-  UpdateWorkVersionCumulativeUsageParams,
   WorkItem,
 } from '@lobechat/types';
 
@@ -78,15 +77,6 @@ export class WorkModel {
 
   deleteTaskWork = (params: DeleteTaskWorkParams): Promise<void> =>
     writes.deleteTaskWork(this.ctx, params);
-
-  attachSourceMessage = (params: {
-    rootOperationId?: string | null;
-    sourceMessageId?: string | null;
-    sourceToolCallId?: string | null;
-  }) => writes.attachSourceMessage(this.ctx, params);
-
-  updateVersionCumulativeUsage = (params: UpdateWorkVersionCumulativeUsageParams) =>
-    writes.updateVersionCumulativeUsage(this.ctx, params);
 
   listByRootOperation = (params: { limit?: number; rootOperationId?: string | null }) =>
     queries.listByRootOperation(this.ctx, params);

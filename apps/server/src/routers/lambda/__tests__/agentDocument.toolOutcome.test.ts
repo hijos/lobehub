@@ -135,20 +135,9 @@ describe('agentDocumentRouter tool outcomes', () => {
         userId: 'user-1',
       }),
     );
-    expect(agentDocumentMocks.registerDocument).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDocumentId: 'agent-document-1',
-        agentId: 'agent-1',
-        documentId: 'document-1',
-        role: 'created',
-        rootOperationId: 'operation-1',
-        source: 'createDocument',
-        sourceMessageId: 'tool-message-1',
-        sourceToolCallId: 'tool-call-1',
-        threadId: 'thread-1',
-        topicId: 'topic-1',
-      }),
-    );
+    // Document Work registration moved to the client (legacy) runtime's stash +
+    // `call_tool` write-once path, so the lambda no longer registers on create.
+    expect(agentDocumentMocks.registerDocument).not.toHaveBeenCalled();
   });
 
   it('does not emit outcome for normal createDocument', async () => {
@@ -212,23 +201,11 @@ describe('agentDocumentRouter tool outcomes', () => {
         userId: 'user-1',
       }),
     );
-    expect(agentDocumentMocks.registerDocument).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDocumentId: 'agent-document-1',
-        agentId: 'agent-1',
-        documentId: 'document-1',
-        role: 'created',
-        rootOperationId: 'operation-1',
-        source: 'createForTopic',
-        sourceMessageId: 'tool-message-1',
-        sourceToolCallId: 'tool-call-1',
-        threadId: 'thread-1',
-        topicId: 'topic-1',
-      }),
-    );
+    // See the createDocument case: registration is client-side now.
+    expect(agentDocumentMocks.registerDocument).not.toHaveBeenCalled();
   });
 
-  it('registers updated document work for attributed renameDocument', async () => {
+  it('does not register document work on the lambda for attributed renameDocument', async () => {
     const caller = createCaller(await createContextInner({ userId: 'user-1' }));
 
     await caller.renameDocument({
@@ -246,20 +223,9 @@ describe('agentDocumentRouter tool outcomes', () => {
       trigger: 'tool',
     });
 
-    expect(agentDocumentMocks.registerDocument).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDocumentId: 'agent-document-1',
-        agentId: 'agent-1',
-        documentId: 'document-1',
-        role: 'updated',
-        rootOperationId: 'root-operation-1',
-        source: 'renameDocument',
-        sourceMessageId: 'tool-message-rename',
-        sourceToolCallId: 'tool-call-rename',
-        threadId: 'thread-rename',
-        title: 'Renamed',
-      }),
-    );
+    // The client runtime stashes the rename intent and writes the Work version
+    // once cost is known; the lambda mutation no longer registers Work.
+    expect(agentDocumentMocks.registerDocument).not.toHaveBeenCalled();
   });
 
   it('deletes document work for attributed removeDocument', async () => {

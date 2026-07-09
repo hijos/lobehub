@@ -15,7 +15,7 @@ import {
   executeToolSpanName,
   tracer as agentRuntimeTracer,
 } from '@lobechat/observability-otel/modules/agent-runtime';
-import { type ChatToolPayload } from '@lobechat/types';
+import { type ChatToolPayload, type WorkRegistrationIntent } from '@lobechat/types';
 
 import { isDeviceCapablePlan } from '@/helpers/executionTarget';
 import {
@@ -29,16 +29,15 @@ import { type RuntimeExecutorContext } from '../context';
 import { dispatchClientTool } from '../dispatchClientTool';
 import {
   archiveRuntimeToolResult,
-  attachWorkSourceMessage,
   buildPostProcessUrl,
   buildServerAgentMemberRunner,
   buildServerVirtualSubAgentRunner,
   GEN_AI_FUNCTION_TOOL_TYPE,
   isOperationInterrupted,
   log,
+  registerWorkFromIntent,
   TOOL_MAX_RETRIES,
   TOOL_PRICING,
-  updateWorkVersionCumulativeUsage,
 } from '../executorHelpers';
 import { formatErrorEventData } from '../formatErrorEventData';
 import {
@@ -416,6 +415,7 @@ export const callToolsBatch =
             });
 
             // Create tool message in database
+            let toolMessageId: string | undefined;
             try {
               const toolMessage = await ctx.messageModel.create({
                 agentId: state.metadata!.agentId!,
@@ -431,15 +431,8 @@ export const callToolsBatch =
                 tool_call_id: chatToolPayload.id,
                 topicId: state.metadata?.topicId,
               });
+              toolMessageId = toolMessage.id;
               toolMessageIds.push(toolMessage.id);
-              await attachWorkSourceMessage({
-                rootOperationId: operationId,
-                serverDB: ctx.serverDB,
-                sourceMessageId: toolMessage.id,
-                sourceToolCallId: chatToolPayload.id,
-                userId: ctx.userId,
-                workspaceId: state.metadata?.workspaceId ?? ctx.workspaceId,
-              });
               log(`[${operationLogId}] Created tool message ${toolMessage.id} for ${toolName}`);
             } catch (error) {
               console.error(
@@ -465,13 +458,17 @@ export const callToolsBatch =
               throw markPersistFatal(fatal);
             }
 
-            // Collect tool result
+            // Collect tool result. `sourceMessageId` + `workRegistration` are
+            // carried so the post-batch accumulate loop can persist the Work
+            // version ONCE with this call's cumulative cost (known only then).
             toolResults.push({
               data: executionResult,
               executionTime,
               isSuccess,
+              sourceMessageId: toolMessageId,
               toolCall: chatToolPayload,
               toolCallId: chatToolPayload.id,
+              workRegistration: executionResult.workRegistration,
             });
 
             events.push({ id: chatToolPayload.id, result: executionResult, type: 'tool_result' });
@@ -551,9 +548,14 @@ export const callToolsBatch =
 
     // Accumulate tool usage sequentially after all tools have finished
     const newState = structuredClone(state);
-    const cumulativeUsageUpdates: {
+    // Work-registration intents produced by the executor, paired with the
+    // cumulative cost as of their tool call so the version is inserted ONCE.
+    const workRegistrations: {
+      intent: WorkRegistrationIntent;
+      sourceMessageId?: string;
+      sourceToolCallId: string;
+      sourceToolName: string;
       state: Pick<AgentState, 'cost' | 'usage'>;
-      toolCallId: string;
     }[] = [];
     for (const result of toolResults) {
       if (result.usageParams) {
@@ -565,22 +567,33 @@ export const callToolsBatch =
         newState.usage = usage;
         if (cost) newState.cost = cost;
 
-        // Snapshot the running totals as of this tool call; the DB writes are
-        // fired together below so the batch doesn't pay one sequential round
-        // trip per tool (each update targets its own sourceToolCallId row).
-        cumulativeUsageUpdates.push({
-          state: { cost: newState.cost, usage: newState.usage },
-          toolCallId: result.toolCallId,
-        });
+        if (result.workRegistration) {
+          // Snapshot the running totals as of this tool call so the version is
+          // inserted with the right cumulative cost; the writes fire together
+          // below (each targets its own sourceToolCallId row).
+          workRegistrations.push({
+            intent: result.workRegistration,
+            sourceMessageId: result.sourceMessageId,
+            sourceToolCallId: result.toolCallId,
+            sourceToolName: result.toolCall.apiName,
+            state: { cost: newState.cost, usage: newState.usage },
+          });
+        }
       }
     }
     await Promise.all(
-      cumulativeUsageUpdates.map((update) =>
-        updateWorkVersionCumulativeUsage({
+      workRegistrations.map((reg) =>
+        registerWorkFromIntent({
+          actorAgentId: state.metadata?.agentId ?? null,
+          intent: reg.intent,
           rootOperationId: operationId,
           serverDB: ctx.serverDB,
-          sourceToolCallId: update.toolCallId,
-          state: update.state,
+          sourceMessageId: reg.sourceMessageId,
+          sourceToolCallId: reg.sourceToolCallId,
+          sourceToolName: reg.sourceToolName,
+          state: reg.state,
+          threadId: state.metadata?.threadId,
+          topicId: state.metadata?.topicId,
           userId: ctx.userId,
           workspaceId: state.metadata?.workspaceId ?? ctx.workspaceId,
         }),

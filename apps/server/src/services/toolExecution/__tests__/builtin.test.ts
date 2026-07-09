@@ -7,8 +7,6 @@ import type { ToolExecutionContext } from '../types';
 const mocks = vi.hoisted(() => ({
   apiHandler: vi.fn(),
   executeLobehubSkill: vi.fn(),
-  handleSkillToolResult: vi.fn(),
-  registerTask: vi.fn(),
 }));
 const mockApiHandler = mocks.apiHandler;
 
@@ -17,12 +15,6 @@ vi.mock('../serverRuntimes', () => ({
   getServerRuntime: vi.fn(async () => ({ createDocument: mocks.apiHandler })),
 }));
 
-vi.mock('@/database/models/work', () => ({
-  WorkModel: vi.fn().mockImplementation(() => ({
-    handleSkillToolResult: mocks.handleSkillToolResult,
-    registerTask: mocks.registerTask,
-  })),
-}));
 vi.mock('@/server/services/composio', () => ({
   ComposioService: vi.fn().mockImplementation(() => ({})),
 }));
@@ -74,8 +66,6 @@ describe('BuiltinToolsExecutor truncated arguments', () => {
   beforeEach(() => {
     mockApiHandler.mockReset();
     mocks.executeLobehubSkill.mockReset();
-    mocks.handleSkillToolResult.mockReset();
-    mocks.registerTask.mockReset();
   });
 
   it('short-circuits with TRUNCATED_ARGUMENTS when JSON is cut mid-object', async () => {
@@ -207,7 +197,7 @@ describe('BuiltinToolsExecutor truncated arguments', () => {
     expect(result.content).toContain('barApi');
   });
 
-  it('registers Linear Work after a successful server-side LobeHub Skill tool call', async () => {
+  it('emits a Linear skill Work intent after a successful server-side LobeHub Skill tool call', async () => {
     mocks.executeLobehubSkill.mockResolvedValueOnce({
       content: JSON.stringify({
         id: 'LOBE-10966',
@@ -227,19 +217,7 @@ describe('BuiltinToolsExecutor truncated arguments', () => {
         source: 'lobehubSkill',
         type: 'default' as any,
       },
-      {
-        ...context,
-        agentId: 'agent-1',
-        operationId: 'op-child',
-        rootOperationId: 'op-root',
-        serverDB: {} as NonNullable<ToolExecutionContext['serverDB']>,
-        threadId: 'thread-1',
-        toolCallId: 'tool-call-linear',
-        toolMessageId: 'msg-tool-linear',
-        topicId: 'topic-1',
-        userId: 'user-1',
-        workspaceId: 'workspace-1',
-      },
+      { ...context, topicId: 'topic-1' },
     );
 
     expect(result.success).toBe(true);
@@ -249,8 +227,10 @@ describe('BuiltinToolsExecutor truncated arguments', () => {
       provider: 'linear',
       toolName: 'save_issue',
     });
-    expect(mocks.handleSkillToolResult).toHaveBeenCalledWith({
-      actorAgentId: 'agent-1',
+    // The executor no longer writes the Work — it hands the runtime an intent
+    // carrying the UNTRUNCATED payload; provenance + cost are stamped by the
+    // agent runtime at persist time.
+    expect(result.workRegistration).toEqual({
       args: { id: 'LOBE-10966', state: 'In Progress' },
       data: {
         id: 'LOBE-10966',
@@ -259,16 +239,12 @@ describe('BuiltinToolsExecutor truncated arguments', () => {
         url: 'https://linear.app/lobehub/issue/LOBE-10966/linear-work-issue',
       },
       provider: 'linear',
-      rootOperationId: 'op-root',
-      sourceMessageId: 'msg-tool-linear',
-      sourceToolCallId: 'tool-call-linear',
-      threadId: 'thread-1',
       toolName: 'save_issue',
-      topicId: 'topic-1',
+      type: 'skill',
     });
   });
 
-  it('registers GitHub Work after a successful server-side LobeHub Skill tool call', async () => {
+  it('emits a GitHub skill Work intent after a successful server-side LobeHub Skill tool call', async () => {
     mocks.executeLobehubSkill.mockResolvedValueOnce({
       content: JSON.stringify({
         html_url: 'https://github.com/lobehub/lobehub/issues/123',
@@ -289,28 +265,21 @@ describe('BuiltinToolsExecutor truncated arguments', () => {
         source: 'lobehubSkill',
         type: 'default' as any,
       },
-      {
-        ...context,
-        rootOperationId: 'op-root',
-        serverDB: {} as NonNullable<ToolExecutionContext['serverDB']>,
-        toolCallId: 'tool-call-github',
-        toolMessageId: 'msg-tool-github',
-        topicId: 'topic-1',
-        userId: 'user-1',
-      },
+      { ...context, topicId: 'topic-1' },
     );
 
     expect(result.success).toBe(true);
-    expect(mocks.handleSkillToolResult).toHaveBeenCalledWith(
+    expect(result.workRegistration).toEqual(
       expect.objectContaining({
+        data: expect.objectContaining({ number: 123 }),
         provider: 'github',
-        sourceToolCallId: 'tool-call-github',
         toolName: 'create_issue',
+        type: 'skill',
       }),
     );
   });
 
-  it('does not register Work for non-adapted skill providers', async () => {
+  it('emits no Work intent for non-adapted skill providers', async () => {
     mocks.executeLobehubSkill.mockResolvedValueOnce({
       content: JSON.stringify({ id: 'msg-1' }),
       success: true,
@@ -329,7 +298,7 @@ describe('BuiltinToolsExecutor truncated arguments', () => {
     );
 
     expect(result.success).toBe(true);
-    expect(mocks.handleSkillToolResult).not.toHaveBeenCalled();
+    expect(result.workRegistration).toBeUndefined();
   });
 });
 
@@ -358,11 +327,7 @@ describe('BuiltinToolsExecutor manifest-driven Work registration', () => {
     type: 'default' as any,
   });
 
-  beforeEach(() => {
-    mocks.registerTask.mockReset().mockResolvedValue({ id: 'work-1' });
-  });
-
-  it('registers a task Work after a successful createTask, reading identity from state', async () => {
+  it('emits a task Work intent after a successful createTask, reading identity from state', async () => {
     const { getServerRuntime } = await import('../serverRuntimes');
     vi.mocked(getServerRuntime).mockResolvedValueOnce({
       createTask: vi.fn().mockResolvedValue({
@@ -378,21 +343,18 @@ describe('BuiltinToolsExecutor manifest-driven Work registration', () => {
     );
 
     expect(result.success).toBe(true);
-    expect(mocks.registerTask).toHaveBeenCalledWith({
-      actorAgentId: 'agent-1',
+    // Provenance (agent / operation / message / tool-call ids) is added by the
+    // agent runtime at persist time, so the intent carries only the resolved
+    // action + targets.
+    expect(result.workRegistration).toEqual({
+      action: 'create',
       role: 'created',
-      rootOperationId: 'op-root',
-      source: 'createTask',
-      sourceMessageId: 'msg-tool-task',
-      sourceToolCallId: 'tool-call-task',
-      taskId: 'task_1',
-      taskIdentifier: 'T-1',
-      threadId: 'thread-1',
-      topicId: 'topic-1',
+      targets: [{ taskId: 'task_1', taskIdentifier: 'T-1' }],
+      type: 'task',
     });
   });
 
-  it('registers only the succeeded items of a partial-failure batch', async () => {
+  it('emits an intent for only the succeeded items of a partial-failure batch', async () => {
     const { getServerRuntime } = await import('../serverRuntimes');
     vi.mocked(getServerRuntime).mockResolvedValueOnce({
       createTasks: vi.fn().mockResolvedValue({
@@ -409,42 +371,46 @@ describe('BuiltinToolsExecutor manifest-driven Work registration', () => {
       }),
     } as any);
 
-    await executor.execute(taskPayload('createTasks', '{"tasks":[]}'), taskContext);
+    const result = await executor.execute(taskPayload('createTasks', '{"tasks":[]}'), taskContext);
 
-    expect(mocks.registerTask).toHaveBeenCalledTimes(1);
-    expect(mocks.registerTask).toHaveBeenCalledWith(
-      expect.objectContaining({ role: 'created', source: 'createTasks', taskIdentifier: 'T-A' }),
-    );
+    expect(result.workRegistration).toEqual({
+      action: 'create',
+      role: 'created',
+      targets: [{ taskIdentifier: 'T-A' }],
+      type: 'task',
+    });
   });
 
-  it('does not register for an API without a work config', async () => {
+  it('emits no intent for an API without a work config', async () => {
     const { getServerRuntime } = await import('../serverRuntimes');
     vi.mocked(getServerRuntime).mockResolvedValueOnce({
       listTasks: vi.fn().mockResolvedValue({ content: 'ok', success: true }),
     } as any);
 
-    await executor.execute(taskPayload('listTasks'), taskContext);
+    const result = await executor.execute(taskPayload('listTasks'), taskContext);
 
-    expect(mocks.registerTask).not.toHaveBeenCalled();
+    expect(result.workRegistration).toBeUndefined();
   });
 
-  it('does not register when the update failed (no extractable target)', async () => {
+  it('emits no intent when the update failed (no extractable target)', async () => {
     const { getServerRuntime } = await import('../serverRuntimes');
     vi.mocked(getServerRuntime).mockResolvedValueOnce({
       editTask: vi.fn().mockResolvedValue({ content: 'Task not found', success: false }),
     } as any);
 
-    await executor.execute(taskPayload('editTask', '{"identifier":"T-404"}'), taskContext);
+    const result = await executor.execute(
+      taskPayload('editTask', '{"identifier":"T-404"}'),
+      taskContext,
+    );
 
-    expect(mocks.registerTask).not.toHaveBeenCalled();
+    expect(result.workRegistration).toBeUndefined();
   });
 
-  it('never fails the tool result when registration throws', async () => {
+  it('emits an update intent for a successful editTask', async () => {
     const { getServerRuntime } = await import('../serverRuntimes');
     vi.mocked(getServerRuntime).mockResolvedValueOnce({
       editTask: vi.fn().mockResolvedValue({ content: 'edited', success: true }),
     } as any);
-    mocks.registerTask.mockRejectedValueOnce(new Error('db down'));
 
     const result = await executor.execute(
       taskPayload('editTask', '{"identifier":"T-1","name":"Edited"}'),
@@ -452,8 +418,11 @@ describe('BuiltinToolsExecutor manifest-driven Work registration', () => {
     );
 
     expect(result.success).toBe(true);
-    expect(mocks.registerTask).toHaveBeenCalledWith(
-      expect.objectContaining({ role: 'updated', source: 'editTask', taskIdentifier: 'T-1' }),
-    );
+    expect(result.workRegistration).toEqual({
+      action: 'update',
+      role: 'updated',
+      targets: [{ taskIdentifier: 'T-1' }],
+      type: 'task',
+    });
   });
 });

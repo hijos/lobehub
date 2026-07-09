@@ -3,8 +3,9 @@ import { type ChatToolPayload } from '@lobechat/types';
 import { type Mock } from 'vitest';
 import { describe, expect, it, vi } from 'vitest';
 
-import { workService } from '@/services/work';
+import { registerClientWorkFromIntent } from '@/store/chat/agents/registerClientWorkFromIntent';
 import { type OperationCancelContext } from '@/store/chat/slices/operation/types';
+import { stashWorkIntent } from '@/utils/clientWorkIntentStash';
 
 import { createAssistantMessage, createCallToolInstruction, createMockStore } from './fixtures';
 import {
@@ -28,10 +29,8 @@ vi.mock('@/utils/localStorage', () => {
   return { AsyncLocalStorage };
 });
 
-vi.mock('@/services/work', () => ({
-  workService: {
-    updateVersionCumulativeUsage: vi.fn().mockResolvedValue(undefined),
-  },
+vi.mock('@/store/chat/agents/registerClientWorkFromIntent', () => ({
+  registerClientWorkFromIntent: vi.fn().mockResolvedValue(undefined),
 }));
 
 describe('call_tool executor', () => {
@@ -75,8 +74,8 @@ describe('call_tool executor', () => {
       expect(mockStore.internal_invokeDifferentTypePlugin).toHaveBeenCalledTimes(1);
     });
 
-    it('should backfill work version cumulative usage after tool usage is accumulated', async () => {
-      vi.mocked(workService.updateVersionCumulativeUsage).mockClear();
+    it('should register the stashed work intent with the accumulated cost after execution', async () => {
+      vi.mocked(registerClientWorkFromIntent).mockClear();
 
       const mockStore = createMockStore();
       const context = createTestContext({ operationId: 'root-op-1' });
@@ -91,6 +90,15 @@ describe('call_tool executor', () => {
         identifier: 'lobe-web-browsing',
         type: 'default',
       };
+
+      // A registration site (builtin/skill/document dispatch) stashes the intent
+      // while the tool runs; `call_tool` drains it AFTER cost is accumulated.
+      stashWorkIntent('tool_call_usage', {
+        action: 'create',
+        role: 'created',
+        targets: [{ taskId: 'task_1', taskIdentifier: 'task-one' }],
+        type: 'task',
+      });
 
       const instruction = createCallToolInstruction(toolCall, { parentMessageId: 'msg_parent' });
       const state = createInitialState({
@@ -112,28 +120,60 @@ describe('call_tool executor', () => {
         context,
       });
 
-      expect(workService.updateVersionCumulativeUsage).toHaveBeenCalledWith(
+      expect(registerClientWorkFromIntent).toHaveBeenCalledWith(
         expect.objectContaining({
-          cumulativeCost: 0.011,
-          cumulativeUsage: expect.objectContaining({
+          intent: expect.objectContaining({ type: 'task' }),
+          rootOperationId: 'root-op-1',
+          sourceToolCallId: 'tool_call_usage',
+          sourceToolName: 'search',
+          // `newState.cost` carries the tool cost (0.01 base + 0.001 search) so
+          // the version row is written once with its cumulative cost.
+          state: expect.objectContaining({
             cost: expect.objectContaining({ total: 0.011 }),
             usage: expect.objectContaining({
               tools: expect.objectContaining({ totalCalls: 1 }),
             }),
           }),
-          rootOperationId: 'root-op-1',
-          sourceToolCallId: 'tool_call_usage',
         }),
       );
     });
 
-    it('should not block the tool step on the cumulative usage backfill', async () => {
-      // The backfill is best-effort bookkeeping fired without awaiting; a slow
-      // (here: never-resolving) network call must not delay the executor.
-      vi.mocked(workService.updateVersionCumulativeUsage).mockClear();
-      vi.mocked(workService.updateVersionCumulativeUsage).mockImplementationOnce(
-        () => new Promise(() => {}),
-      );
+    it('should not register work when no intent was stashed for the tool call', async () => {
+      vi.mocked(registerClientWorkFromIntent).mockClear();
+
+      const mockStore = createMockStore();
+      const context = createTestContext({ operationId: 'root-op-1' });
+
+      const assistantMessage = createAssistantMessage({ groupId: 'group_123' });
+      mockStore.dbMessagesMap[context.messageKey] = [assistantMessage];
+
+      const toolCall: ChatToolPayload = {
+        apiName: 'search',
+        arguments: JSON.stringify({ query: 'test query' }),
+        id: 'tool_call_no_intent',
+        identifier: 'lobe-web-browsing',
+        type: 'default',
+      };
+
+      const instruction = createCallToolInstruction(toolCall, { parentMessageId: 'msg_parent' });
+      const state = createInitialState({ operationId: 'root-op-1' });
+
+      await executeWithMockContext({
+        executor: 'call_tool',
+        instruction,
+        state,
+        mockStore,
+        context,
+      });
+
+      expect(registerClientWorkFromIntent).not.toHaveBeenCalled();
+    });
+
+    it('should not block the tool step on the work registration', async () => {
+      // Registration is best-effort bookkeeping fired without awaiting; a slow
+      // (here: never-resolving) call must not delay the executor.
+      vi.mocked(registerClientWorkFromIntent).mockClear();
+      vi.mocked(registerClientWorkFromIntent).mockImplementationOnce(() => new Promise(() => {}));
 
       const mockStore = createMockStore();
       const context = createTestContext({ operationId: 'root-op-1' });
@@ -149,6 +189,13 @@ describe('call_tool executor', () => {
         type: 'default',
       };
 
+      stashWorkIntent('tool_call_blocking', {
+        action: 'create',
+        role: 'created',
+        targets: [{ taskId: 'task_blocking' }],
+        type: 'task',
+      });
+
       const instruction = createCallToolInstruction(toolCall, { parentMessageId: 'msg_parent' });
       const state = createInitialState({ operationId: 'root-op-1' });
 
@@ -161,7 +208,7 @@ describe('call_tool executor', () => {
       });
 
       expect(result.events).toHaveLength(1);
-      expect(workService.updateVersionCumulativeUsage).toHaveBeenCalledWith(
+      expect(registerClientWorkFromIntent).toHaveBeenCalledWith(
         expect.objectContaining({ sourceToolCallId: 'tool_call_blocking' }),
       );
     });

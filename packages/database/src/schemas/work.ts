@@ -111,7 +111,8 @@ export const workVersions = pgTable(
     threadId: text('thread_id').references(() => threads.id, { onDelete: 'set null' }),
     /**
      * Message that triggered this version — the persisted tool result message.
-     * Backfilled after the message is persisted (see WorkModel.attachSourceMessage).
+     * Stamped at insert time by the agent runtime, which registers the version
+     * only after the tool result message exists (see registerWorkFromIntent).
      */
     sourceMessageId: text('source_message_id').references(() => messages.id, {
       onDelete: 'set null',

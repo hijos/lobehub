@@ -5,6 +5,7 @@ import {
   type ClientSecretPayload,
   type ExecSubAgentParams,
   type StepActivatedSkill,
+  type WorkRegistrationIntent,
 } from '@lobechat/types';
 
 export interface ToolExecutionMemoryEmbeddingRuntime {
@@ -136,8 +137,6 @@ export interface ToolExecutionContext {
    * result; the member barrier backfills + resumes/finishes the parked supervisor.
    */
   agentMember?: ServerAgentMemberRunner;
-  /** Assistant message that owns this tool call. */
-  anchorMessageId?: string;
   /**
    * Visibility of the agent executing this tool call. Resolved once per tool
    * call in the runtime executor. Tool runtimes that persist agent side-effects
@@ -147,6 +146,8 @@ export interface ToolExecutionContext {
    * `null` when the agent is missing or not visible to the caller.
    */
   agentVisibility?: 'private' | 'public' | null;
+  /** Assistant message that owns this tool call. */
+  anchorMessageId?: string;
   /**
    * The assistant message that carries this tool call (the runtime's
    * `payload.parentMessageId`). Distinct from `messageId`, which is the source
@@ -195,6 +196,16 @@ export interface ToolExecutionContext {
   memoryToolPermission?: 'read-only' | 'read-write';
   /** Source user message ID used by Agent Signal procedure suppression. */
   messageId?: string;
+  /**
+   * Sink for a Work-registration intent produced as a side-effect inside a tool
+   * runtime (e.g. the agentDocuments runtime, whose registration is decoupled
+   * from the returned tool result). The builtin executor installs this collector
+   * before dispatching the runtime call and hoists whatever intent the runtime
+   * emits onto {@link ToolExecutionResult.workRegistration}, so it reaches
+   * `callTool` / `callToolsBatch` and the Work version is inserted ONCE with cost
+   * — the same one-shot path task/skill tools use directly on the result.
+   */
+  onWorkRegistration?: (intent: WorkRegistrationIntent) => void;
   /** Agent runtime operation ID for structured tool outcome identity. */
   operationId?: string;
   /**
@@ -267,6 +278,16 @@ export interface ToolExecutionResult {
   error?: any;
   state?: Record<string, any>;
   success: boolean;
+  /**
+   * Transient Work-registration intent produced by the executor and consumed by
+   * the agent runtime (`callTool` / `callToolsBatch`) once the tool call's
+   * cumulative cost is known, so the Work version is inserted ONCE with its
+   * cost. In-memory only: it rides through the in-process executor→runtime
+   * boundary and is deliberately NOT persisted with the tool message (which
+   * stores only `content` / `state` / `error`) nor length-truncated (unlike
+   * `content`), so skill identity in the untruncated payload survives.
+   */
+  workRegistration?: WorkRegistrationIntent;
 }
 
 export interface ToolExecutionResultResponse extends ToolExecutionResult {

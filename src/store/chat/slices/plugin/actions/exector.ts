@@ -1,9 +1,9 @@
 import { isWorkSkillProvider } from '@lobechat/types';
 
 import { type MCPToolCallResult } from '@/libs/mcp';
-import { workService } from '@/services/work';
 import { useToolStore } from '@/store/tool';
 import { type ChatToolPayload } from '@/types/message';
+import { stashWorkIntent } from '@/utils/clientWorkIntentStash';
 import { safeParseJSON } from '@/utils/safeParseJSON';
 
 /**
@@ -104,22 +104,17 @@ export const lobehubSkillExecutor: RemoteToolExecutor = async (p, context) => {
   }
 
   if (isWorkSkillProvider(provider)) {
-    try {
-      await workService.handleSkillToolResult({
-        actorAgentId: context?.agentId,
-        args,
-        data: result.data,
-        provider,
-        rootOperationId: context?.rootOperationId,
-        sourceMessageId: context?.sourceMessageId,
-        sourceToolCallId: context?.sourceToolCallId,
-        threadId: context?.threadId,
-        toolName: p.apiName,
-        topicId: context?.topicId,
-      });
-    } catch (error) {
-      console.error('[LobehubSkill] Failed to register %s Work:', provider, error);
-    }
+    // Stash the Work-registration intent (carrying the UNTRUNCATED result data)
+    // keyed by toolCallId; `call_tool` drains it and registers the Work ONCE the
+    // tool call's cumulative cost is known, instead of registering cost-less here
+    // and back-filling. The runtime supplies provenance + cost at persist time.
+    stashWorkIntent(context?.sourceToolCallId, {
+      args,
+      data: result.data,
+      provider,
+      toolName: p.apiName,
+      type: 'skill',
+    });
   }
 
   // Convert to MCPToolCallResult format

@@ -1,12 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({
-  deleteTaskWork: vi.fn(),
-  refreshConversation: vi.fn(),
-  refreshRootOperation: vi.fn(),
-  refreshVersions: vi.fn(),
-  registerTask: vi.fn(),
-}));
+import { takeWorkIntent } from '@/utils/clientWorkIntentStash';
 
 vi.mock('@lobechat/builtin-tools', () => ({
   builtinTools: [
@@ -25,17 +19,7 @@ vi.mock('@lobechat/builtin-tools', () => ({
   ],
 }));
 
-vi.mock('@/services/work', () => ({
-  workService: {
-    deleteTaskWork: mocks.deleteTaskWork,
-    refreshConversation: mocks.refreshConversation,
-    refreshRootOperation: mocks.refreshRootOperation,
-    refreshVersions: mocks.refreshVersions,
-    registerTask: mocks.registerTask,
-  },
-}));
-
-const { registerBuiltinToolWork } = await import('./workRegistration');
+const { stashBuiltinToolWorkIntent } = await import('./workRegistration');
 
 const ctx = {
   agentId: 'agent-1',
@@ -47,58 +31,50 @@ const ctx = {
   topicId: 'topic-1',
 } as any;
 
-describe('registerBuiltinToolWork (client dispatch)', () => {
+describe('stashBuiltinToolWorkIntent (client dispatch)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.registerTask.mockResolvedValue({ id: 'work-1' });
-    mocks.deleteTaskWork.mockResolvedValue(undefined);
-    mocks.refreshConversation.mockResolvedValue(undefined);
-    mocks.refreshRootOperation.mockResolvedValue(undefined);
-    mocks.refreshVersions.mockResolvedValue(undefined);
+    // Drain any leftover from a prior test so the shared stash starts clean.
+    takeWorkIntent(ctx.toolCallId);
   });
 
-  it('registers a created task and refreshes the work caches', async () => {
-    await registerBuiltinToolWork(
-      'lobe-task',
-      'createTask',
-      { name: 'A', instruction: 'do' },
-      ctx,
-      { content: '', state: { identifier: 'T-1', success: true, taskId: 'task_1' }, success: true },
-    );
-
-    expect(mocks.registerTask).toHaveBeenCalledWith({
-      actorAgentId: 'agent-1',
-      role: 'created',
-      rootOperationId: 'op-root',
-      source: 'createTask',
-      sourceMessageId: 'msg-tool-1',
-      sourceToolCallId: 'tool-call-1',
-      taskId: 'task_1',
-      taskIdentifier: 'T-1',
-      threadId: 'thread-1',
-      topicId: 'topic-1',
+  it('stashes a created-task intent with the resolved target', () => {
+    stashBuiltinToolWorkIntent('lobe-task', 'createTask', { instruction: 'do', name: 'A' }, ctx, {
+      content: '',
+      state: { identifier: 'T-1', success: true, taskId: 'task_1' },
+      success: true,
     });
-    expect(mocks.refreshConversation).toHaveBeenCalledWith('topic-1', 'thread-1');
-    expect(mocks.refreshRootOperation).toHaveBeenCalledWith('op-root');
-    expect(mocks.refreshVersions).toHaveBeenCalledWith('work-1');
+
+    expect(takeWorkIntent(ctx.toolCallId)).toEqual({
+      action: 'create',
+      role: 'created',
+      targets: [{ taskId: 'task_1', taskIdentifier: 'T-1' }],
+      type: 'task',
+    });
   });
 
-  it('registers an update via args.identifier with role "updated"', async () => {
-    await registerBuiltinToolWork(
+  it('stashes an update intent (role "updated") resolved via args.identifier', () => {
+    stashBuiltinToolWorkIntent(
       'lobe-task',
       'editTask',
       { identifier: 'T-9', name: 'Edited' },
       ctx,
-      { content: '', success: true },
+      {
+        content: '',
+        success: true,
+      },
     );
 
-    expect(mocks.registerTask).toHaveBeenCalledWith(
-      expect.objectContaining({ role: 'updated', source: 'editTask', taskIdentifier: 'T-9' }),
-    );
+    expect(takeWorkIntent(ctx.toolCallId)).toEqual({
+      action: 'update',
+      role: 'updated',
+      targets: [{ taskId: undefined, taskIdentifier: 'T-9' }],
+      type: 'task',
+    });
   });
 
-  it('registers only the succeeded items of a batch and refreshes caches once', async () => {
-    await registerBuiltinToolWork('lobe-task', 'createTasks', { tasks: [] }, ctx, {
+  it('stashes only the succeeded items of a partially failed batch', () => {
+    stashBuiltinToolWorkIntent('lobe-task', 'createTasks', { tasks: [] }, ctx, {
       content: '',
       state: {
         failed: 1,
@@ -111,66 +87,61 @@ describe('registerBuiltinToolWork (client dispatch)', () => {
       success: false,
     });
 
-    expect(mocks.registerTask).toHaveBeenCalledTimes(1);
-    expect(mocks.registerTask).toHaveBeenCalledWith(
-      expect.objectContaining({ role: 'created', source: 'createTasks', taskIdentifier: 'T-A' }),
-    );
-    // Caches refresh once for the whole batch, not per item.
-    expect(mocks.refreshConversation).toHaveBeenCalledTimes(1);
+    expect(takeWorkIntent(ctx.toolCallId)).toEqual({
+      action: 'create',
+      role: 'created',
+      targets: [{ taskId: undefined, taskIdentifier: 'T-A' }],
+      type: 'task',
+    });
   });
 
-  it('deletes the task work and refreshes caches, without registering a version', async () => {
-    await registerBuiltinToolWork('lobe-task', 'deleteTask', { identifier: 'T-1' }, ctx, {
+  it('stashes a delete intent carrying the resolved target', () => {
+    stashBuiltinToolWorkIntent('lobe-task', 'deleteTask', { identifier: 'T-1' }, ctx, {
       content: '',
       state: { identifier: 'T-1', success: true, taskId: 'task_1' },
       success: true,
     });
 
-    expect(mocks.deleteTaskWork).toHaveBeenCalledWith({ taskId: 'task_1' });
-    expect(mocks.registerTask).not.toHaveBeenCalled();
-    expect(mocks.refreshConversation).toHaveBeenCalledWith('topic-1', 'thread-1');
-    expect(mocks.refreshRootOperation).toHaveBeenCalledWith('op-root');
-    // No work id survives a delete, so version lists are not refreshed.
-    expect(mocks.refreshVersions).not.toHaveBeenCalled();
+    expect(takeWorkIntent(ctx.toolCallId)).toEqual({
+      action: 'delete',
+      targets: [{ taskId: 'task_1', taskIdentifier: 'T-1' }],
+      type: 'task',
+    });
   });
 
-  it('does not delete when the delete call failed (no taskId target)', async () => {
-    await registerBuiltinToolWork('lobe-task', 'deleteTask', { identifier: 'T-1' }, ctx, {
+  it('stashes nothing when the delete call failed (no targets)', () => {
+    stashBuiltinToolWorkIntent('lobe-task', 'deleteTask', { identifier: 'T-1' }, ctx, {
       content: 'boom',
       success: false,
     });
 
-    expect(mocks.deleteTaskWork).not.toHaveBeenCalled();
+    expect(takeWorkIntent(ctx.toolCallId)).toBeUndefined();
   });
 
-  it('is a no-op for an API without a work config', async () => {
-    await registerBuiltinToolWork('lobe-task', 'listTasks', {}, ctx, {
-      content: '',
-      success: true,
-    });
+  it('stashes nothing for an API without a work config', () => {
+    stashBuiltinToolWorkIntent('lobe-task', 'listTasks', {}, ctx, { content: '', success: true });
 
-    expect(mocks.registerTask).not.toHaveBeenCalled();
-    expect(mocks.refreshConversation).not.toHaveBeenCalled();
+    expect(takeWorkIntent(ctx.toolCallId)).toBeUndefined();
   });
 
-  it('does not register when the call failed (no targets)', async () => {
-    await registerBuiltinToolWork('lobe-task', 'editTask', { identifier: 'T-1' }, ctx, {
+  it('stashes nothing when the call failed (no targets)', () => {
+    stashBuiltinToolWorkIntent('lobe-task', 'editTask', { identifier: 'T-1' }, ctx, {
       content: 'boom',
       success: false,
     });
 
-    expect(mocks.registerTask).not.toHaveBeenCalled();
+    expect(takeWorkIntent(ctx.toolCallId)).toBeUndefined();
   });
 
-  it('swallows registration errors (best-effort, never throws)', async () => {
-    mocks.registerTask.mockRejectedValueOnce(new Error('trpc died'));
+  it('stashes nothing when the tool call has no toolCallId to key by', () => {
+    stashBuiltinToolWorkIntent(
+      'lobe-task',
+      'createTask',
+      { name: 'A' },
+      { ...ctx, toolCallId: undefined },
+      { content: '', state: { identifier: 'T-1', success: true }, success: true },
+    );
 
-    await expect(
-      registerBuiltinToolWork('lobe-task', 'createTask', { name: 'A' }, ctx, {
-        content: '',
-        state: { identifier: 'T-1', success: true },
-        success: true,
-      }),
-    ).resolves.toBeUndefined();
+    expect(takeWorkIntent(ctx.toolCallId)).toBeUndefined();
   });
 });

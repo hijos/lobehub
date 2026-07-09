@@ -28,15 +28,14 @@ import { type RuntimeExecutorContext } from '../context';
 import { dispatchClientTool } from '../dispatchClientTool';
 import {
   archiveRuntimeToolResult,
-  attachWorkSourceMessage,
   buildServerAgentMemberRunner,
   buildServerVirtualSubAgentRunner,
   GEN_AI_FUNCTION_TOOL_TYPE,
   isOperationInterrupted,
   log,
+  registerWorkFromIntent,
   TOOL_MAX_RETRIES,
   TOOL_PRICING,
-  updateWorkVersionCumulativeUsage,
 } from '../executorHelpers';
 import { formatErrorEventData } from '../formatErrorEventData';
 import {
@@ -496,15 +495,6 @@ export const callTool =
           throw markPersistFatal(fatal);
         }
 
-        await attachWorkSourceMessage({
-          rootOperationId: operationId,
-          serverDB: ctx.serverDB,
-          sourceMessageId: toolMessageId,
-          sourceToolCallId: chatToolPayload.id,
-          userId: ctx.userId,
-          workspaceId: state.metadata?.workspaceId ?? ctx.workspaceId,
-        });
-
         const newState = structuredClone(state);
 
         // Keep plugin/pluginState on the in-state copy: the batch executor
@@ -537,14 +527,26 @@ export const callTool =
         newState.usage = usage;
         if (cost) newState.cost = cost;
 
-        await updateWorkVersionCumulativeUsage({
-          rootOperationId: operationId,
-          serverDB: ctx.serverDB,
-          sourceToolCallId: chatToolPayload.id,
-          state: newState,
-          userId: ctx.userId,
-          workspaceId: state.metadata?.workspaceId ?? ctx.workspaceId,
-        });
+        // Persist the Work version ONCE, now that `accumulateTool` has resolved
+        // the cumulative cost. The executor only produced the registration
+        // intent (task / skill / document identity); provenance + cost are
+        // stamped here at insert time — no cost-less insert + later backfill.
+        if (executionResult.workRegistration) {
+          await registerWorkFromIntent({
+            actorAgentId: state.metadata?.agentId ?? null,
+            intent: executionResult.workRegistration,
+            rootOperationId: operationId,
+            serverDB: ctx.serverDB,
+            sourceMessageId: toolMessageId,
+            sourceToolCallId: chatToolPayload.id,
+            sourceToolName: chatToolPayload.apiName,
+            state: newState,
+            threadId: state.metadata?.threadId,
+            topicId: state.metadata?.topicId,
+            userId: ctx.userId,
+            workspaceId: state.metadata?.workspaceId ?? ctx.workspaceId,
+          });
+        }
 
         // Persist ToolsActivator discovery results to state.activatedStepTools
         const discoveredTools = executionResult.state?.activatedTools as

@@ -1,16 +1,19 @@
 import { builtinTools } from '@lobechat/builtin-tools';
 import { type LobeChatDatabase } from '@lobechat/database';
-import { type ChatToolPayload, isWorkSkillProvider } from '@lobechat/types';
+import {
+  type ChatToolPayload,
+  isWorkSkillProvider,
+  type WorkRegistrationIntent,
+} from '@lobechat/types';
 import { detectTruncatedJSON, safeParseJSON } from '@lobechat/utils';
 import debug from 'debug';
 
-import { WorkModel } from '@/database/models/work';
 import { ComposioService } from '@/server/services/composio';
 import { MarketService } from '@/server/services/market';
 
 import { getServerRuntime, hasServerRuntime } from './serverRuntimes';
 import { type IToolExecutor, type ToolExecutionContext, type ToolExecutionResult } from './types';
-import { registerBuiltinToolWork } from './workRegistration';
+import { resolveBuiltinToolWorkIntent } from './workRegistration';
 
 const log = debug('lobe-server:builtin-tools-executor');
 
@@ -116,27 +119,21 @@ export class BuiltinToolsExecutor implements IToolExecutor {
       });
 
       if (result.success && isWorkSkillProvider(identifier)) {
-        try {
-          const workModel = new WorkModel(
-            context.serverDB ?? this.db,
-            context.userId ?? this.userId,
-            context.workspaceId,
-          );
-          await workModel.handleSkillToolResult({
-            actorAgentId: context.agentId ?? null,
+        // Defer Work registration to the agent runtime so the version is written
+        // ONCE with its cumulative cost (known only after execution). Carry the
+        // UNTRUNCATED payload here: the runtime only sees the truncated
+        // `content`, but skill identity (issue/PR url, number, …) lives
+        // exclusively in the raw result.
+        return {
+          ...result,
+          workRegistration: {
             args,
             data: safeParseJSON(result.content) ?? result.content,
             provider: identifier,
-            rootOperationId: context.rootOperationId ?? context.operationId,
-            sourceMessageId: context.toolMessageId,
-            sourceToolCallId: context.toolCallId,
-            threadId: context.threadId,
             toolName: apiName,
-            topicId: context.topicId,
-          });
-        } catch (error) {
-          console.error('Failed to register Work for %s:%s: %O', identifier, apiName, error);
-        }
+            type: 'skill',
+          },
+        };
       }
 
       return result;
@@ -187,23 +184,25 @@ export class BuiltinToolsExecutor implements IToolExecutor {
     }
 
     try {
+      // Install a sink for runtimes whose Work registration is a side-effect
+      // decoupled from the returned result (the agentDocuments runtime emits its
+      // intent here instead of writing the version directly).
+      let collectedWorkIntent: WorkRegistrationIntent | undefined;
+      context.onWorkRegistration = (intent) => {
+        collectedWorkIntent = intent;
+      };
+
       const result = await runtime[apiName](args, context);
 
-      // Manifest-driven Work registration: inline (before returning the result)
-      // so the Work version is durable before `tool_end` publishes, matching the
-      // old in-runtime registration ordering. No-op unless the API declares a
-      // `work` config; best-effort (never fails the tool).
-      await registerBuiltinToolWork({
-        apiName,
-        args,
-        context,
-        db: this.db,
-        identifier,
-        result,
-        userId: this.userId,
-      });
+      // Manifest-driven Work registration: resolve the intent from the API's
+      // declarative `work` config + result/args and hand it to the agent
+      // runtime, which persists the Work version ONCE with its cumulative cost.
+      // Falls back to the intent a runtime emitted via `onWorkRegistration`
+      // (documents). No-op unless the API declares a `work` config or emits one.
+      const workRegistration =
+        resolveBuiltinToolWorkIntent(identifier, apiName, { args, result }) ?? collectedWorkIntent;
 
-      return result;
+      return workRegistration ? { ...result, workRegistration } : result;
     } catch (e) {
       const error = e as Error;
       console.error('Error executing builtin tool %s:%s: %O', identifier, apiName, error);

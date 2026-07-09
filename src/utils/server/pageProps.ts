@@ -1,4 +1,4 @@
-import { translation } from '@/server/translation';
+import { translation } from '@/libs/i18n/serverTranslation';
 import { type DynamicLayoutProps } from '@/types/next';
 
 import { RouteVariants } from './routeVariants';

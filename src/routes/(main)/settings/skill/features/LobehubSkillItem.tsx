@@ -2,8 +2,7 @@
 
 import { type LobehubSkillProviderType } from '@lobechat/const';
 import { Avatar, Center, DropdownMenu, Flexbox, Icon, Tooltip } from '@lobehub/ui';
-import { Button as LobeButton, confirmModal } from '@lobehub/ui/base-ui';
-import { Button } from 'antd';
+import { Button, Button as LobeButton, confirmModal } from '@lobehub/ui/base-ui';
 import { cssVar } from 'antd-style';
 import {
   CircleCheck,

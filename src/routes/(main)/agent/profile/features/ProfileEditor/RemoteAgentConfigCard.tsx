@@ -6,8 +6,14 @@ import {
 } from '@lobechat/heterogeneous-agents';
 import type { HeterogeneousProviderConfig } from '@lobechat/types';
 import { ActionIcon, Flexbox, Icon, Text, Tooltip } from '@lobehub/ui';
-import { Button as BaseButton, createModal, Select, useModalContext } from '@lobehub/ui/base-ui';
-import { Button, Tag } from 'antd';
+import {
+  Button as BaseButton,
+  Button,
+  createModal,
+  Select,
+  useModalContext,
+} from '@lobehub/ui/base-ui';
+import { Tag } from 'antd';
 import { createStaticStyles, cssVar } from 'antd-style';
 import { t as i18nT } from 'i18next';
 import { BotIcon, CheckCircle2, MonitorSmartphone, RefreshCw, XCircle } from 'lucide-react';

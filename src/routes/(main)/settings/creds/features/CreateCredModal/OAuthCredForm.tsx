@@ -1,9 +1,9 @@
 'use client';
 
 import { Flexbox } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
+import { Button, Select } from '@lobehub/ui/base-ui';
 import { useMutation } from '@tanstack/react-query';
-import { Avatar, Empty, Form, Input, Select, Spin } from 'antd';
+import { Avatar, Empty, Form, Input, Spin } from 'antd';
 import { createStaticStyles } from 'antd-style';
 import { type FC } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -100,13 +100,15 @@ const OAuthCredForm: FC<OAuthCredFormProps> = ({ credsApi, disabled, onBack, onS
         name="oauthConnectionId"
         rules={[{ required: true, message: t('creds.form.connectionRequired') }]}
       >
-        <Select disabled={disabled} placeholder={t('creds.form.selectConnectionPlaceholder')}>
-          {connections.map((conn: any) => {
+        <Select
+          disabled={disabled}
+          placeholder={t('creds.form.selectConnectionPlaceholder')}
+          options={connections.map((conn: any) => {
             const provider = conn.providerId || 'OAuth';
             const displayName =
               conn.providerName || conn.providerUserName || conn.email || conn.name;
-            return (
-              <Select.Option key={conn.id} value={conn.id}>
+            return {
+              label: (
                 <span className={styles.connectionOption}>
                   {conn.avatar && <Avatar size="small" src={conn.avatar} />}
                   <span>
@@ -114,10 +116,11 @@ const OAuthCredForm: FC<OAuthCredFormProps> = ({ credsApi, disabled, onBack, onS
                     {displayName && <span className={styles.username}> - {displayName}</span>}
                   </span>
                 </span>
-              </Select.Option>
-            );
+              ),
+              value: conn.id,
+            };
           })}
-        </Select>
+        />
       </Form.Item>
 
       <Form.Item

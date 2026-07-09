@@ -108,7 +108,7 @@ interface TestBaseUIButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElem
 
 interface TestBaseUISwitchProps extends Omit<
   ButtonHTMLAttributes<HTMLButtonElement>,
-  'onChange' | 'onClick' | 'value'
+  'defaultValue' | 'onChange' | 'onClick' | 'value'
 > {
   checked?: boolean;
   checkedChildren?: ReactNode;

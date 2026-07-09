@@ -2,7 +2,6 @@
  * @vitest-environment happy-dom
  */
 import { render, screen, within } from '@testing-library/react';
-import type * as AntdModule from 'antd';
 import { Form } from 'antd';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -28,7 +27,10 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('antd', async (importOriginal) => {
-  const actual = await importOriginal<typeof AntdModule>();
+  const actual = (await importOriginal()) as { App: Record<string, unknown> } & Record<
+    string,
+    unknown
+  >;
 
   return {
     ...actual,

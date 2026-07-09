@@ -1,8 +1,8 @@
 'use client';
 
 import { Flexbox, Form, FormGroup, FormItem, Tag, Text } from '@lobehub/ui';
-import { Button, Switch } from '@lobehub/ui/base-ui';
-import { Form as AntdForm, type FormInstance, InputNumber, Popconfirm, Select } from 'antd';
+import { Button, Select, Switch } from '@lobehub/ui/base-ui';
+import { Form as AntdForm, type FormInstance, InputNumber, Popconfirm } from 'antd';
 import { createStaticStyles } from 'antd-style';
 import { Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { Fragment, memo, useCallback, useMemo, useState } from 'react';
@@ -152,9 +152,9 @@ const SchemaField = memo<SchemaFieldProps>(({ field, parentKey, divider, disable
                 ? (item) => (
                     <Flexbox horizontal align="center" gap={12} justify="space-between">
                       <span>{item.label}</span>
-                      {item.data.description ? (
+                      {item.title ? (
                         <Text fontSize={12} type="secondary">
-                          {item.data.description}
+                          {item.title}
                         </Text>
                       ) : null}
                     </Flexbox>
@@ -162,8 +162,8 @@ const SchemaField = memo<SchemaFieldProps>(({ field, parentKey, divider, disable
                 : undefined
             }
             options={field.enum.map((value, i) => ({
-              description: field.enumDescriptions?.[i] ? t(field.enumDescriptions[i]) : undefined,
               label: field.enumLabels?.[i] ? t(field.enumLabels[i]) : value,
+              title: field.enumDescriptions?.[i] ? t(field.enumDescriptions[i]) : undefined,
               value,
             }))}
           />

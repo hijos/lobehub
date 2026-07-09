@@ -28,6 +28,7 @@ vi.mock('antd-style', async (importOriginal) => {
       fn({
         css: () => '',
         cssVar: {},
+        cx: (...classes: string[]) => classes.filter(Boolean).join(' '),
       }),
     ),
     useTheme: () => ({

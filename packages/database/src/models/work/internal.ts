@@ -1,5 +1,7 @@
 import type {
   DocumentWorkSummaryItem,
+  GithubWorkVersionSnapshot,
+  LinearWorkVersionSnapshot,
   RegisterTaskWorkParams,
   TaskWorkListItem,
   TaskWorkSummaryItem,
@@ -21,6 +23,46 @@ import { taskOwnership, versionOwnership, type WorkContext, workOwnership } from
  * and render the Work's current content (works.currentVersionId join).
  */
 export const currentVersions = alias(workVersions, 'current_work_versions');
+
+/**
+ * Max length for free-text fields on summary/list card payloads (message list,
+ * sidebar summary, workspace gallery). Full bodies stay on version snapshots
+ * in DB; only cards need a short preview.
+ */
+export const SUMMARY_TEXT_PREFIX_LENGTH = 120;
+
+/** Collapse whitespace and cap length for card-facing Work text fields. */
+export const truncateSummaryText = (value: string | null | undefined): string | null => {
+  const normalized = value?.replaceAll(/\s+/g, ' ').trim();
+  if (!normalized) return null;
+
+  return normalized.length > SUMMARY_TEXT_PREFIX_LENGTH
+    ? `${normalized.slice(0, SUMMARY_TEXT_PREFIX_LENGTH)}...`
+    : normalized;
+};
+
+/**
+ * Strip Linear full-document `content` and cap description for summary/list
+ * rows so message-list and gallery payloads stay small.
+ */
+export const slimLinearSnapshotForSummary = (
+  linear: LinearWorkVersionSnapshot,
+): LinearWorkVersionSnapshot => ({
+  ...linear,
+  content: null,
+  description: truncateSummaryText(linear.description || linear.content),
+});
+
+/**
+ * Cap GitHub issue/PR `body` for summary/list rows (cards only show a one-line
+ * preview; full body remains on the version snapshot in DB).
+ */
+export const slimGithubSnapshotForSummary = (
+  github: GithubWorkVersionSnapshot,
+): GithubWorkVersionSnapshot => ({
+  ...github,
+  body: truncateSummaryText(github.body),
+});
 
 /** Provenance fields shared by all four Register*WorkParams shapes. */
 export type WorkVersionEventParams = Pick<

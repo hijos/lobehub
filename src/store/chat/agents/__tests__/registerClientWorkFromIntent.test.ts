@@ -60,7 +60,7 @@ describe('registerClientWorkFromIntent', () => {
   });
 
   describe('task', () => {
-    it('registers each created target with the cumulative cost and refreshes caches', async () => {
+    it('registers each created target with the cumulative cost and refreshes version lists only', async () => {
       await registerClientWorkFromIntent({
         ...base,
         intent: {
@@ -89,11 +89,12 @@ describe('registerClientWorkFromIntent', () => {
           topicId: 'topic-1',
         }),
       );
-      expect(mocks.refreshConversation).toHaveBeenCalledWith('topic-1', 'thread-1');
+      // Message list settles once per operation (WorksSection) — no per-tool flood.
+      expect(mocks.refreshConversation).not.toHaveBeenCalled();
       expect(mocks.refreshVersions).toHaveBeenCalledWith('work-1');
     });
 
-    it('deletes the task work per target and refreshes without version lists', async () => {
+    it('deletes the task work per target without refreshing the message list', async () => {
       await registerClientWorkFromIntent({
         ...base,
         intent: { action: 'delete', targets: [{ taskId: 'task_1' }], type: 'task' },
@@ -101,7 +102,7 @@ describe('registerClientWorkFromIntent', () => {
 
       expect(mocks.deleteTaskWork).toHaveBeenCalledWith({ taskId: 'task_1' });
       expect(mocks.registerTask).not.toHaveBeenCalled();
-      expect(mocks.refreshConversation).toHaveBeenCalledWith('topic-1', 'thread-1');
+      expect(mocks.refreshConversation).not.toHaveBeenCalled();
       expect(mocks.refreshVersions).not.toHaveBeenCalled();
     });
 

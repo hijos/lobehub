@@ -17,6 +17,7 @@ import { getTotalCostByWorkIds } from './cost';
 import {
   listSnapshotVersionEventRows,
   listSnapshotWorkSummaryRows,
+  slimGithubSnapshotForSummary,
   type SnapshotWorkSummaryQueryRow,
 } from './internal';
 import { createVersion, findById, resolveWorkUpsertConflict } from './writes';
@@ -161,7 +162,7 @@ export const toGithubWorkSummaries = async (
   return rows.map((row) => ({
     ...row.work,
     event: row.event,
-    github: row.snapshot,
+    github: slimGithubSnapshotForSummary(row.snapshot),
     resourceType: row.work.resourceType as GithubWorkSummaryItem['resourceType'],
     totalCost: costByWorkId.get(row.work.id) ?? null,
     type: 'github' as const,

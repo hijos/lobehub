@@ -203,7 +203,6 @@ const GroupMessage = memo<GroupMessageProps>(
     return (
       <ChatItem
         showTitle
-        afterActions={<MessageWorks rootOperationId={workRootOperationId} />}
         avatar={isSupervisor ? { ...avatar, title: groupMeta.title } : avatar}
         id={id}
         placement={'left'}
@@ -222,6 +221,9 @@ const GroupMessage = memo<GroupMessageProps>(
               {actionBarHolder}
             </>
           )
+        }
+        afterActions={
+          workRootOperationId ? <MessageWorks rootOperationId={workRootOperationId} /> : undefined
         }
         customAvatarRender={
           isSupervisor

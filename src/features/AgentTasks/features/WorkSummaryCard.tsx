@@ -73,7 +73,8 @@ interface WorkSummaryCardProps {
 
 const WorkSummaryCard = memo<WorkSummaryCardProps>(({ className, item, onOpen }) => {
   const { t } = useTranslation('chat');
-  const [openDocument, openTaskDetail] = useChatStore((s) => [s.openDocument, s.openTaskDetail]);
+  const openDocument = useChatStore((s) => s.openDocument);
+  const openTaskDetail = useChatStore((s) => s.openTaskDetail);
   const cost = formatWorkVersionCost(item.totalCost);
   const isDocument = item.type === 'document';
   const isLinear = item.type === 'linear';
@@ -89,10 +90,12 @@ const WorkSummaryCard = memo<WorkSummaryCardProps>(({ className, item, onOpen })
         ? item.github.title
         : item.task.name;
   const title = snapshotTitle?.trim() || item.resourceIdentifier || item.resourceId;
+  // Summary payloads slim long free-text (linear content / github body capped
+  // server-side); prefer description, then short body/status — never full docs.
   const description = isDocument
     ? item.document.description?.trim()
     : isLinear
-      ? (item.linear.description || item.linear.content || item.linear.status)?.trim()
+      ? (item.linear.description || item.linear.status)?.trim()
       : isGithub
         ? (item.github.body || item.github.state)?.trim()
         : item.task.description?.trim();

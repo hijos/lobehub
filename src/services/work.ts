@@ -60,14 +60,11 @@ class WorkService {
     params: RegisterSkillToolResultWorkParams,
   ): Promise<WorkItem | null> => {
     const work = await lambdaClient.work.handleSkillToolResult.mutate(params);
-    await Promise.all([
-      // Summary chips + sidebar summary ride the message payload, so this
-      // invalidates the topic's message list; the history view is refreshed too.
-      this.refreshConversation(params.topicId, params.threadId),
-      // Expanded version-history lists subscribe per work id; without this the
-      // sidebar keeps showing the pre-mutation versions until a page refresh.
-      this.refreshVersions(work?.id),
-    ]);
+    // Do not revalidate `message:list` here — per-tool full-list refresh floods
+    // the network during multi-tool rounds. Message-backed chips + sidebar
+    // summary settle once per operation (see WorksSection). Only expanded
+    // version timelines need a targeted refresh.
+    await this.refreshVersions(work?.id);
 
     return work;
   };

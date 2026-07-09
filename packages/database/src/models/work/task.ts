@@ -20,6 +20,7 @@ import {
   taskSummaryFields,
   taskSummaryJoin,
   type TaskWorkSummaryQueryRow,
+  truncateSummaryText,
   versionEventSelection,
 } from './internal';
 import { createVersion, findById, resolveWorkUpsertConflict } from './writes';
@@ -211,7 +212,7 @@ export const toTaskWorkSummaries = async (
     event: row.event,
     resourceType: 'task' as const,
     task: {
-      description: row.taskDescription,
+      description: truncateSummaryText(row.taskDescription),
       name: row.taskName,
       priority: row.taskPriority,
       status: row.taskStatus,

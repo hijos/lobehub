@@ -21,7 +21,6 @@ import debug from 'debug';
 
 import { getActiveWorkspaceSlug } from '@/business/client/hooks/useActiveWorkspaceSlug';
 import { taskService } from '@/services/task';
-import { workService } from '@/services/work';
 import { getChatStoreState } from '@/store/chat';
 import { getTaskStoreState } from '@/store/task';
 import { findSubtaskParentId } from '@/store/task/slices/detail/reducer';
@@ -79,12 +78,6 @@ const extractIdentifier = (params: unknown, result: BuiltinToolResult): string |
   const fromParams = (params as { identifier?: unknown } | null | undefined)?.identifier;
   if (typeof fromParams === 'string' && fromParams.length > 0) return fromParams;
   return undefined;
-};
-
-const refreshConversationWorks = async (ctx?: BuiltinToolContext) => {
-  await workService.refreshConversation(ctx?.topicId, ctx?.threadId).catch((error) => {
-    log('[TaskExecutor] refresh works failed:', error);
-  });
 };
 
 class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
@@ -851,7 +844,9 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
       const id = await getTaskStoreState().updateTaskStatus(identifier, params.status, {
         error: params.error,
       });
-      await refreshConversationWorks(ctx);
+      // Work chips read live task status via the message-list summary join;
+      // settle-time refresh (WorksSection / gateway tool_end) picks it up —
+      // avoid a full `message:list` revalidate on every status tool call.
 
       return {
         content:

@@ -95,15 +95,14 @@ const AssistantMessage = memo<AssistantMessageProps>(
       <ChatItem
         showTitle
         aboveMessage={null}
-        afterActions={<MessageWorks rootOperationId={metadata?.work?.rootOperationId} />}
         avatar={avatar}
         belowMessage={hasEmptyErrorMessage ? footerRender : undefined}
         customErrorRender={(error) => <ErrorMessageExtra data={item} error={error} />}
+        error={errorContent && error ? errorContent : undefined}
         editing={editing}
         // ChatItem renders this as the primary block when the message is empty,
         // or inside messageExtra (below the content) when the turn streamed
         // content before erroring — so don't gate it on empty content.
-        error={errorContent && error ? errorContent : undefined}
         id={id}
         loading={generating || isCreating}
         message={message}
@@ -120,6 +119,11 @@ const AssistantMessage = memo<AssistantMessageProps>(
             )}
             {!disableEditing && actionBarHolder}
           </>
+        }
+        afterActions={
+          metadata?.work?.rootOperationId ? (
+            <MessageWorks rootOperationId={metadata.work.rootOperationId} />
+          ) : undefined
         }
         messageExtra={
           <>

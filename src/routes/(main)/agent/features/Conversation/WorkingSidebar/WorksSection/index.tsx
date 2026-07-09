@@ -12,7 +12,7 @@ import {
   ListIcon,
   Trash2Icon,
 } from 'lucide-react';
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import NeuralNetworkLoading from '@/components/NeuralNetworkLoading';
@@ -335,37 +335,42 @@ const WorksSection = memo<WorksSectionProps>(({ active = true }) => {
     operationSelectors.isAgentRuntimeRunningByContext({ agentId, threadId, topicId }),
   );
 
-  // Summary rides the message payload — read Work summaries straight from the
-  // active conversation's raw messages (scoped to the active thread) instead of
-  // a dedicated fetch, so opening the sidebar costs zero network.
-  const conversationMessages = useChatStore(dbMessageSelectors.activeDbMessages, isEqual);
-  const summaryData = useMemo(() => {
+  // Summary rides the message payload — derive it in the selector so we only
+  // re-render when the *works* shape changes, not on every streamed token
+  // (which would thrash `isEqual` over the full `UIChatMessage[]`).
+  const summaryData = useChatStore((s) => {
+    const messages = dbMessageSelectors.activeDbMessages(s);
     const scoped = threadId
-      ? conversationMessages.filter((m) => m.threadId === threadId)
-      : conversationMessages.filter((m) => !m.threadId);
+      ? messages.filter((m) => m.threadId === threadId)
+      : messages.filter((m) => !m.threadId);
     return getAllWorkSummaries(scoped);
-  }, [conversationMessages, threadId]);
+  }, isEqual);
 
-  // The summary rides the message payload and carries each Work's version /
-  // event / cost, so it changes on any real Work mutation (create, update,
-  // version bump). When its *content* changes, this sidebar's own lazy caches —
-  // the history list and any expanded version timeline — are stale, so
-  // revalidate the mounted work keys. This is the sole owner of that freshness
-  // policy (the gateway transport keeps no Work-cache knowledge).
+  // Freshness policy for Work caches (sole owner — gateway transport keeps no
+  // Work-cache knowledge):
   //
-  // These lazy views are an operation-grained concern, so while a run is active
-  // we suppress the refresh entirely (the summary chips still update live off
-  // the payload) and let the effect re-run when `isRunning` flips false at
-  // operation end — a single deep-equal diff against the pre-run snapshot then
-  // fires exactly one refresh for the whole round, instead of one per tool_end
-  // (which flooded `work.listByConversation`). Non-streaming Work edits still
-  // refresh immediately since `isRunning` is already false. `prevSummaryRef` is
-  // only advanced when we actually refresh, so intra-run changes stay pending;
-  // `refreshConversationViews` touches only mounted keys, so it's a no-op when
-  // the sidebar is collapsed or on the summary view.
+  // 1. While a run is active, suppress refresh. Client registration no longer
+  //    revalidates `message:list` per tool; gateway already pulls messages on
+  //    tool_end (works may lag one beat until register commits).
+  // 2. When `isRunning` flips false, revalidate message list + sidebar lazy
+  //    views once for the whole round (chips + history + expanded versions).
+  // 3. Outside a run, if summary content changes (e.g. document delete), only
+  //    the lazy history/version keys need a touch.
+  const wasRunningRef = useRef(false);
   const prevSummaryRef = useRef(summaryData);
   useEffect(() => {
-    if (isRunning) return;
+    if (isRunning) {
+      wasRunningRef.current = true;
+      return;
+    }
+
+    if (wasRunningRef.current) {
+      wasRunningRef.current = false;
+      prevSummaryRef.current = summaryData;
+      void workService.refreshConversation(topicId, threadId);
+      return;
+    }
+
     if (isEqual(prevSummaryRef.current, summaryData)) return;
     prevSummaryRef.current = summaryData;
     void workService.refreshConversationViews(topicId, threadId);

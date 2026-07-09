@@ -36,10 +36,13 @@ import {
 } from './github';
 import {
   currentVersions,
+  slimGithubSnapshotForSummary,
+  slimLinearSnapshotForSummary,
   snapshotField,
   type SnapshotWorkType,
   taskSummaryFields,
   taskSummaryJoin,
+  truncateSummaryText,
 } from './internal';
 import {
   listLinearVersionEvents,
@@ -272,7 +275,7 @@ export const listByConversation = async (
         ...row.work,
         resourceType: 'task' as const,
         task: {
-          description: row.taskDescription,
+          description: truncateSummaryText(row.taskDescription),
           name: row.taskName,
           priority: row.taskPriority,
           status: row.taskStatus,
@@ -294,7 +297,7 @@ export const listByConversation = async (
       eventCreatedAt: row.eventCreatedAt,
       item: {
         ...row.work,
-        linear: row.snapshot,
+        linear: slimLinearSnapshotForSummary(row.snapshot),
         resourceType: row.work.resourceType as LinearWorkListItem['resourceType'],
         type: 'linear' as const,
       } satisfies LinearWorkListItem,
@@ -303,7 +306,7 @@ export const listByConversation = async (
       eventCreatedAt: row.eventCreatedAt,
       item: {
         ...row.work,
-        github: row.snapshot,
+        github: slimGithubSnapshotForSummary(row.snapshot),
         resourceType: row.work.resourceType as GithubWorkListItem['resourceType'],
         type: 'github' as const,
       } satisfies GithubWorkListItem,
@@ -463,7 +466,9 @@ export const listByWorkspace = async (
       case 'linear': {
         return {
           ...base,
-          linear: (row.snapshot as { linear: LinearWorkVersionSnapshot }).linear,
+          linear: slimLinearSnapshotForSummary(
+            (row.snapshot as { linear: LinearWorkVersionSnapshot }).linear,
+          ),
           resourceType: row.work.resourceType as LinearWorkSummaryItem['resourceType'],
           type: 'linear',
         };
@@ -472,7 +477,9 @@ export const listByWorkspace = async (
       case 'github': {
         return {
           ...base,
-          github: (row.snapshot as { github: GithubWorkVersionSnapshot }).github,
+          github: slimGithubSnapshotForSummary(
+            (row.snapshot as { github: GithubWorkVersionSnapshot }).github,
+          ),
           resourceType: row.work.resourceType as GithubWorkSummaryItem['resourceType'],
           type: 'github',
         };
@@ -483,7 +490,7 @@ export const listByWorkspace = async (
           ...base,
           resourceType: 'task',
           task: {
-            description: row.taskDescription,
+            description: truncateSummaryText(row.taskDescription),
             name: row.taskName,
             priority: row.taskPriority,
             status: row.taskStatus,

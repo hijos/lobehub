@@ -17,6 +17,7 @@ import { getTotalCostByWorkIds } from './cost';
 import {
   listSnapshotVersionEventRows,
   listSnapshotWorkSummaryRows,
+  slimLinearSnapshotForSummary,
   type SnapshotWorkSummaryQueryRow,
 } from './internal';
 import { createVersion, findById, resolveWorkUpsertConflict } from './writes';
@@ -171,7 +172,7 @@ export const toLinearWorkSummaries = async (
   return rows.map((row) => ({
     ...row.work,
     event: row.event,
-    linear: row.snapshot,
+    linear: slimLinearSnapshotForSummary(row.snapshot),
     resourceType: row.work.resourceType as LinearWorkSummaryItem['resourceType'],
     totalCost: costByWorkId.get(row.work.id) ?? null,
     type: 'linear' as const,

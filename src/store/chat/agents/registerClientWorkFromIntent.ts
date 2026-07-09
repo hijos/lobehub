@@ -33,9 +33,11 @@ interface RegisterClientWorkFromIntentParams {
  *
  * Best-effort: any failure is swallowed so Work bookkeeping never breaks the
  * tool result. Fired without awaiting from `call_tool` so the agent's next step
- * doesn't wait on the register round-trip + SWR revalidation. Document deletes
- * are NOT handled here — they stay a server-side side-effect of the removeDocument
- * tool mutation (a deletion carries no cost, so it needs no cost-stamping defer).
+ * doesn't wait on the register round-trip. Does not revalidate `message:list`
+ * per tool — message-backed chips settle once per operation (WorksSection).
+ * Document deletes are NOT handled here — they stay a server-side side-effect
+ * of the removeDocument tool mutation (a deletion carries no cost, so it needs
+ * no cost-stamping defer).
  */
 export const registerClientWorkFromIntent = async ({
   actorAgentId,
@@ -64,9 +66,8 @@ export const registerClientWorkFromIntent = async ({
               : undefined,
           ),
         );
-        await workService
-          .refreshConversation(topicId, threadId)
-          .catch((error) => log('refresh work caches failed: %O', error));
+        // Message-backed chips settle once per operation (WorksSection); avoid
+        // a full `message:list` revalidate on every tool.
         return;
       }
 
@@ -95,13 +96,11 @@ export const registerClientWorkFromIntent = async ({
         ),
       );
 
-      // Refresh the shared work caches ONCE for the whole batch: the conversation
-      // (message-backed summary + sidebar history), plus the expanded version
-      // history per touched work.
-      await Promise.all([
-        workService.refreshConversation(topicId, threadId),
-        ...works.filter(Boolean).map((work) => workService.refreshVersions(work?.id)),
-      ]).catch((error) => log('refresh work caches failed: %O', error));
+      // Expanded version timelines only — conversation message list + sidebar
+      // history refresh once at operation end (WorksSection), not per tool.
+      await Promise.all(
+        works.filter(Boolean).map((work) => workService.refreshVersions(work?.id)),
+      ).catch((error) => log('refresh work version caches failed: %O', error));
       return;
     }
 
@@ -121,10 +120,9 @@ export const registerClientWorkFromIntent = async ({
         topicId,
       });
 
-      await Promise.all([
-        workService.refreshConversation(topicId, threadId),
-        workService.refreshVersions(work?.id),
-      ]).catch((error) => log('refresh work caches failed: %O', error));
+      await workService
+        .refreshVersions(work?.id)
+        .catch((error) => log('refresh work version caches failed: %O', error));
       return;
     }
 

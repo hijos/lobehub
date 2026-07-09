@@ -280,7 +280,7 @@ const AgentWorkingSidebar = memo(() => {
             />
           </Flexbox>
           <Flexbox className={activeTab === 'works' ? styles.pane : styles.paneHidden}>
-            <WorksSection />
+            <WorksSection active={showRightPanel && activeTab === 'works'} />
           </Flexbox>
         </Flexbox>
       </Flexbox>

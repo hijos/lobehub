@@ -13,11 +13,10 @@ import type {
   ConversationContext,
   UIChatMessage,
 } from '@lobechat/types';
-import { AgentRuntimeErrorType, isWorkSkillProvider } from '@lobechat/types';
+import { AgentRuntimeErrorType } from '@lobechat/types';
 import { isRecord, pickNonEmptyString, toRecord } from '@lobechat/utils/object';
 
 import { messageService } from '@/services/message';
-import { workService } from '@/services/work';
 import { emitClientAgentSignalSourceEvent } from '@/store/chat/slices/agentRun/actions/lifecycle/agentSignalBridge';
 import type {
   AgentRunLifecycle,
@@ -780,16 +779,12 @@ export const createGatewayEventHandler = (
             maybeRefresh,
             dispatchOnAfterCall(data, context.topicId ?? undefined).catch(console.error),
           ]);
-          // Server-executed skill tools (Linear/GitHub) register Works on the
-          // server (BuiltinToolsExecutor), so no client-side mutation ever
-          // invalidates the work SWR caches — the Works sidebar (list + version
-          // history) would stay frozen at its mount-time snapshot. Revalidate
-          // the whole work domain here; `mutate` only refetches currently-
-          // mounted keys, so this is a no-op when no work UI is open.
-          const identity = readToolPayload(unwrapToolPayload(data?.payload));
-          if (isWorkSkillProvider(identity?.identifier)) {
-            await workService.refreshAll().catch(console.error);
-          }
+          // Work summaries (in-message chips + sidebar summary) ride the message
+          // payload, so `fetchAndReplaceMessages` above already refreshed them for
+          // every tool type. The sidebar's history / version views are separate
+          // lazy caches; keeping them live is the Works sidebar's own concern — it
+          // watches its summary for real changes and revalidates them itself (see
+          // WorksSection), so the transport layer owns no Work-cache knowledge.
         });
         break;
       }

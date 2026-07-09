@@ -64,10 +64,9 @@ export const registerClientWorkFromIntent = async ({
               : undefined,
           ),
         );
-        await Promise.all([
-          workService.refreshConversation(topicId, threadId),
-          workService.refreshRootOperation(rootOperationId),
-        ]).catch((error) => log('refresh work caches failed: %O', error));
+        await workService
+          .refreshConversation(topicId, threadId)
+          .catch((error) => log('refresh work caches failed: %O', error));
         return;
       }
 
@@ -96,11 +95,11 @@ export const registerClientWorkFromIntent = async ({
         ),
       );
 
-      // Refresh the shared work caches ONCE for the whole batch: conversation +
-      // root-operation lists, plus the expanded version history per touched work.
+      // Refresh the shared work caches ONCE for the whole batch: the conversation
+      // (message-backed summary + sidebar history), plus the expanded version
+      // history per touched work.
       await Promise.all([
         workService.refreshConversation(topicId, threadId),
-        workService.refreshRootOperation(rootOperationId),
         ...works.filter(Boolean).map((work) => workService.refreshVersions(work?.id)),
       ]).catch((error) => log('refresh work caches failed: %O', error));
       return;
@@ -124,7 +123,6 @@ export const registerClientWorkFromIntent = async ({
 
       await Promise.all([
         workService.refreshConversation(topicId, threadId),
-        workService.refreshRootOperation(rootOperationId),
         workService.refreshVersions(work?.id),
       ]).catch((error) => log('refresh work caches failed: %O', error));
       return;

@@ -4,7 +4,7 @@ import isEqual from 'fast-deep-equal';
 import { type SWRResponse } from 'swr';
 
 import { mutate, useClientDataSWRWithSync } from '@/libs/swr';
-import { messageKeys } from '@/libs/swr/keys';
+import { isMessageListKey, messageKeys } from '@/libs/swr/keys';
 import { messageService } from '@/services/message';
 import { operationSelectors } from '@/store/chat/slices/operation/selectors';
 import { type ChatStore } from '@/store/chat/store';
@@ -56,13 +56,10 @@ export class MessageQueryActionImpl {
     const agentId = context?.agentId ?? this.#get().activeAgentId;
     const topicId = context?.topicId !== undefined ? context.topicId : this.#get().activeTopicId;
     // Invalidate every `message:list` entry for this agent+topic (any scope /
-    // thread / page-size variant). The key shape is
-    // `[message:list, ConversationContext, version]`, so match on key[1].
-    await mutate((key) => {
-      if (!Array.isArray(key) || key[0] !== messageKeys.list.root) return false;
-      const ctx = key[1] as ConversationContext | undefined;
-      return !!ctx && ctx.agentId === agentId && ctx.topicId === topicId;
-    });
+    // thread / page-size variant).
+    await mutate((key) =>
+      isMessageListKey(key, (ctx) => ctx.agentId === agentId && ctx.topicId === topicId),
+    );
   };
 
   prefetchMessages = async (context: ConversationContext): Promise<void> => {
@@ -207,11 +204,7 @@ export class MessageQueryActionImpl {
     // (any page-size / version / workspace-augmented variant). `revalidate: false`
     // seeds the cache without firing a network request.
     void mutate(
-      (key) => {
-        if (!Array.isArray(key) || key[0] !== messageKeys.list.root) return false;
-        const keyCtx = key[1] as ConversationContext | undefined;
-        return !!keyCtx && messageMapKey(keyCtx) === messagesKey;
-      },
+      (key) => isMessageListKey(key, (keyCtx) => messageMapKey(keyCtx) === messagesKey),
       messages,
       { revalidate: false },
     );

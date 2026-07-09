@@ -8,7 +8,6 @@ const mocks = vi.hoisted(() => ({
   internalRefreshTaskDetail: vi.fn(),
   openTaskDetail: vi.fn(),
   refreshConversation: vi.fn(),
-  refreshRootOperation: vi.fn(),
   refreshTaskList: vi.fn(),
   refreshVersions: vi.fn(),
   registerTask: vi.fn(),
@@ -36,7 +35,6 @@ vi.mock('@/services/task', () => ({
 vi.mock('@/services/work', () => ({
   workService: {
     refreshConversation: mocks.refreshConversation,
-    refreshRootOperation: mocks.refreshRootOperation,
     refreshVersions: mocks.refreshVersions,
     registerTask: mocks.registerTask,
   },
@@ -50,7 +48,6 @@ describe('TaskExecutor.onAfterCall — portal auto-open', () => {
     vi.clearAllMocks();
     mocks.internalRefreshTaskDetail.mockResolvedValue(undefined);
     mocks.refreshConversation.mockResolvedValue(undefined);
-    mocks.refreshRootOperation.mockResolvedValue(undefined);
     mocks.refreshTaskList.mockResolvedValue(undefined);
     mocks.refreshVersions.mockResolvedValue(undefined);
     mocks.registerTask.mockResolvedValue({ id: 'work-1' });

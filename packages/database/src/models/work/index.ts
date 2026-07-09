@@ -89,12 +89,6 @@ export class WorkModel {
     rootOperationIds?: string[] | null;
   }) => queries.listSummariesByRootOperations(this.ctx, params);
 
-  listSummariesByConversation = (params: {
-    limit?: number;
-    threadId?: string | null;
-    topicId?: string | null;
-  }) => queries.listSummariesByConversation(this.ctx, params);
-
   listByConversation = (params: {
     limit?: number;
     threadId?: string | null;

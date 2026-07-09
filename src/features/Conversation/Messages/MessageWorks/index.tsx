@@ -1,15 +1,12 @@
 'use client';
 
-import type { WorkSummaryItem, WorkSummaryMap } from '@lobechat/types';
+import type { WorkSummaryItem } from '@lobechat/types';
 import { Flexbox } from '@lobehub/ui';
 import { createStaticStyles } from 'antd-style';
 import isEqual from 'fast-deep-equal';
 import { memo } from 'react';
 
 import WorkSummaryCard from '@/features/AgentTasks/features/WorkSummaryCard';
-import { useClientDataSWR } from '@/libs/swr';
-import { workKeys } from '@/libs/swr/keys';
-import { workService } from '@/services/work';
 
 import { dataSelectors, useConversationStore } from '../../store';
 
@@ -25,21 +22,14 @@ interface MessageWorksProps {
 }
 
 const MessageWorks = memo<MessageWorksProps>(({ rootOperationId }) => {
-  // Memoized per displayMessages snapshot, so the conversation tree is walked
-  // once regardless of how many messages mount a MessageWorks instance.
-  const rootOperationIds = useConversationStore(dataSelectors.workRootOperationIds, isEqual);
-
-  const { data: workSummaryMap = {} } = useClientDataSWR<WorkSummaryMap>(
-    rootOperationId && rootOperationIds.length > 0
-      ? workKeys.rootOperationSummaries(rootOperationIds)
-      : null,
-    () => workService.listSummariesByRootOperations({ rootOperationIds }),
-    {
-      fallbackData: {},
-      revalidateOnFocus: false,
-    },
+  // Works ride the message payload (attached server-side to each round's anchor
+  // message), so the chip reads its summaries straight from the store index —
+  // no dedicated work-summary fetch. The index is memoized per dbMessages
+  // snapshot, so it's built once regardless of how many chips mount.
+  const data: WorkSummaryItem[] = useConversationStore(
+    dataSelectors.workSummariesByRootOperationId(rootOperationId),
+    isEqual,
   );
-  const data: WorkSummaryItem[] = rootOperationId ? (workSummaryMap[rootOperationId] ?? []) : [];
 
   if (data.length === 0) return null;
 

@@ -9,7 +9,7 @@ import { topicSelectors } from '@/store/chat/selectors';
 
 import { type State } from '../../initialState';
 import { getPendingInterventions } from './pendingInterventions';
-import { getWorkRootOperationIds } from './workRootOperationIds';
+import { getWorkSummariesByRootOperationId } from './workSummaries';
 
 const displayMessages = (s: State) => s.displayMessages;
 const displayMessageIds = (s: State) => s.displayMessages.map((m) => m.id);
@@ -127,7 +127,11 @@ const currentTopicSummary = () => {
 
 const pendingInterventions = (s: State) => getPendingInterventions(s.displayMessages);
 
-const workRootOperationIds = (s: State) => getWorkRootOperationIds(s.displayMessages);
+// Works ride the message payload (attached server-side to each round's anchor
+// message), so the in-message chips read from the raw `dbMessages` (keyed by the
+// display-resolved rootOperationId) instead of a dedicated work-summary fetch.
+const workSummariesByRootOperationId = (rootOperationId?: string | null) => (s: State) =>
+  getWorkSummariesByRootOperationId(s.dbMessages, rootOperationId);
 
 const isSecondLastMessageFromUser = (s: State) => s.displayMessages.at(-2)?.role === 'user';
 
@@ -242,5 +246,5 @@ export const dataSelectors = {
   messagesInit,
   pendingInterventions,
   skipFetch,
-  workRootOperationIds,
+  workSummariesByRootOperationId,
 };

@@ -23,7 +23,7 @@ vi.mock('@/services/task', () => ({
 
 vi.mock('@/services/work', () => ({
   workService: {
-    refreshAll: vi.fn(),
+    refreshAllConversations: vi.fn(),
   },
 }));
 
@@ -299,7 +299,7 @@ describe('TaskDetailSliceAction', () => {
       expect(result?.name).toBe('Test Task');
       expect(useTaskStore.getState().taskDetailMap['T-1']).toBeUndefined();
       expect(useTaskStore.getState().activeTaskId).toBeUndefined();
-      expect(workService.refreshAll).toHaveBeenCalled();
+      expect(workService.refreshAllConversations).toHaveBeenCalled();
     });
 
     it('should set isDeletingTask during deletion', async () => {
@@ -330,7 +330,7 @@ describe('TaskDetailSliceAction', () => {
         data: { identifier: 'T-1' },
         success: true,
       } as any);
-      vi.mocked(workService.refreshAll).mockRejectedValue(new Error('refresh failed'));
+      vi.mocked(workService.refreshAllConversations).mockRejectedValue(new Error('refresh failed'));
 
       const result = await useTaskStore.getState().deleteTask('T-1');
 
@@ -355,7 +355,7 @@ describe('TaskDetailSliceAction', () => {
 
       expect(useTaskStore.getState().taskDetailMap['T-1']).toEqual(snapshot);
       expect(useTaskStore.getState().isDeletingTask).toBe(false);
-      expect(workService.refreshAll).not.toHaveBeenCalled();
+      expect(workService.refreshAllConversations).not.toHaveBeenCalled();
     });
   });
 

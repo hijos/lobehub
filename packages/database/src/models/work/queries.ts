@@ -171,39 +171,6 @@ export const listSummariesByRootOperations = async (
   return result;
 };
 
-export const listSummariesByConversation = async (
-  ctx: WorkContext,
-  params: {
-    limit?: number;
-    threadId?: string | null;
-    topicId?: string | null;
-  },
-): Promise<WorkSummaryItem[]> => {
-  if (!params.topicId) return [];
-
-  const limit = params.limit ?? 50;
-  const threadFilter = params.threadId
-    ? eq(workVersions.threadId, params.threadId)
-    : isNull(workVersions.threadId);
-  const filters = [eq(workVersions.topicId, params.topicId), threadFilter];
-  const [taskRows, documentRows, linearRows, githubRows] = await Promise.all([
-    listTaskWorkSummaryRows(ctx, filters, limit * WORK_TYPE_FANOUT),
-    listDocumentWorkSummaryRows(ctx, filters, limit * WORK_TYPE_FANOUT),
-    listLinearWorkSummaryRows(ctx, filters, limit * WORK_TYPE_FANOUT),
-    listGithubWorkSummaryRows(ctx, filters, limit * WORK_TYPE_FANOUT),
-  ]);
-
-  return latestSummaryItemsByWork(
-    [
-      ...(await toTaskWorkSummaries(ctx, taskRows)),
-      ...(await toDocumentWorkSummaries(ctx, documentRows)),
-      ...(await toLinearWorkSummaries(ctx, linearRows)),
-      ...(await toGithubWorkSummaries(ctx, githubRows)),
-    ].sort((a, b) => b.event.createdAt.getTime() - a.event.createdAt.getTime()),
-    limit,
-  );
-};
-
 export const listByConversation = async (
   ctx: WorkContext,
   params: {

@@ -13,7 +13,6 @@ const mocks = vi.hoisted(() => ({
   modifyNodes: vi.fn(),
   readDocument: vi.fn(),
   refreshConversation: vi.fn(),
-  refreshRootOperation: vi.fn(),
   removeDocument: vi.fn(),
   renameDocument: vi.fn(),
   replaceDocumentContent: vi.fn(),
@@ -42,7 +41,6 @@ vi.mock('@/services/agentDocument', () => ({
 vi.mock('@/services/work', () => ({
   workService: {
     refreshConversation: mocks.refreshConversation,
-    refreshRootOperation: mocks.refreshRootOperation,
   },
 }));
 
@@ -63,7 +61,6 @@ describe('agentDocumentsExecutor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.refreshConversation.mockResolvedValue(undefined);
-    mocks.refreshRootOperation.mockResolvedValue(undefined);
     // Drain any leftover so the shared per-toolCallId stash starts clean.
     takeWorkIntent('tool-call-1');
   });

@@ -32,6 +32,7 @@ vi.mock('../Review', () => ({ default: () => <div /> }));
 vi.mock('../ProgressSection', () => ({ default: () => <div /> }));
 vi.mock('../ResourcesSection', () => ({ default: () => <div /> }));
 vi.mock('../ParamsSection', () => ({ default: () => <div /> }));
+vi.mock('../WorksSection', () => ({ default: () => <div /> }));
 
 vi.mock('@/store/agent', () => ({
   getAgentStoreState: () => ({ activeAgentId: undefined }),

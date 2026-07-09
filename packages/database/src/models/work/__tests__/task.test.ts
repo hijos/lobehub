@@ -301,15 +301,6 @@ describe('WorkModel · task', () => {
     expect(summary.totalCost).toBeCloseTo(0.000_987, 6);
     // Summary description comes from the current version snapshot, not the live task row.
     expect(summary.task.description).toBe('Updated description');
-
-    const byConversation = await workModel.listSummariesByConversation({ topicId });
-    expect(byConversation).toHaveLength(1);
-    expect(byConversation[0]).toMatchObject({
-      event: expect.objectContaining({ role: 'updated', rootOperationId: 'op-summary-edit' }),
-      id: first?.id,
-      version: expect.objectContaining({ version: 2 }),
-    });
-    expect(byConversation[0].totalCost).toBeCloseTo(0.000_987, 6);
   });
 
   it('does not double-count cumulative cost snapshots within the same operation', async () => {
@@ -394,7 +385,6 @@ describe('WorkModel · task', () => {
       topicId: otherTopicId,
     });
 
-    expect(await workModel.listSummariesByConversation({ topicId: otherTopicId })).toEqual([]);
     expect(
       await workModel.listSummariesByRootOperations({ rootOperationIds: ['op-other-summary'] }),
     ).toEqual({ 'op-other-summary': [] });

@@ -1,7 +1,8 @@
-import type { TaskStatus, WorkListItem, WorkSummaryItem, WorkVersionItem } from '@lobechat/types';
+import type { TaskStatus, WorkListItem, WorkVersionItem } from '@lobechat/types';
 import { Github } from '@lobehub/icons';
 import { ActionIcon, Center, Empty, Flexbox, Tag, Text } from '@lobehub/ui';
 import { createStaticStyles } from 'antd-style';
+import isEqual from 'fast-deep-equal';
 import {
   ChevronDownIcon,
   ChevronRightIcon,
@@ -11,7 +12,7 @@ import {
   ListIcon,
   Trash2Icon,
 } from 'lucide-react';
-import { memo, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import NeuralNetworkLoading from '@/components/NeuralNetworkLoading';
@@ -20,11 +21,13 @@ import LinearIcon from '@/features/AgentTasks/features/icons/LinearIcon';
 import TaskPriorityTag from '@/features/AgentTasks/features/TaskPriorityTag';
 import TaskStatusTag from '@/features/AgentTasks/features/TaskStatusTag';
 import WorkSummaryCard from '@/features/AgentTasks/features/WorkSummaryCard';
+import { getAllWorkSummaries } from '@/features/Conversation/store/slices/data/workSummaries';
 import { useLocalStorageState } from '@/hooks/useLocalStorageState';
 import { useClientDataSWR } from '@/libs/swr';
 import { workKeys } from '@/libs/swr/keys';
 import { workService } from '@/services/work';
 import { useChatStore } from '@/store/chat';
+import { dbMessageSelectors } from '@/store/chat/selectors';
 import { formatWorkVersionCost } from '@/utils/workVersionCost';
 
 const TASK_STATUS_SET = new Set<TaskStatus>([
@@ -301,7 +304,17 @@ const WorksModeToolbar = memo<{
 
 WorksModeToolbar.displayName = 'WorksModeToolbar';
 
-const WorksSection = memo(() => {
+interface WorksSectionProps {
+  /**
+   * Whether the works tab is actually visible (sidebar open + this tab active).
+   * Gates the history fetch so a collapsed / inactive sidebar never pulls it —
+   * mirrors `ResourcesSection`'s `enabled`. Summary needs no gate: it reads the
+   * message payload already in the store.
+   */
+  active?: boolean;
+}
+
+const WorksSection = memo<WorksSectionProps>(({ active = true }) => {
   const { t } = useTranslation('chat');
   const [mode, setMode] = useLocalStorageState<WorksViewMode>(
     WORKS_VIEW_MODE_STORAGE_KEY,
@@ -309,26 +322,44 @@ const WorksSection = memo(() => {
   );
   const topicId = useChatStore((s) => s.activeTopicId);
   const threadId = useChatStore((s) => s.activeThreadId);
-  const {
-    data: summaryData = [],
-    error: summaryError,
-    isLoading: isSummaryLoading,
-  } = useClientDataSWR<WorkSummaryItem[]>(
-    mode === 'summary' && topicId
-      ? workKeys.conversationSummaries(topicId, threadId ?? null)
-      : null,
-    () => workService.listSummariesByConversation({ threadId, topicId }),
-    {
-      fallbackData: [],
-      revalidateOnFocus: false,
-    },
-  );
+
+  // Summary rides the message payload — read Work summaries straight from the
+  // active conversation's raw messages (scoped to the active thread) instead of
+  // a dedicated fetch, so opening the sidebar costs zero network.
+  const conversationMessages = useChatStore(dbMessageSelectors.activeDbMessages, isEqual);
+  const summaryData = useMemo(() => {
+    const scoped = threadId
+      ? conversationMessages.filter((m) => m.threadId === threadId)
+      : conversationMessages.filter((m) => !m.threadId);
+    return getAllWorkSummaries(scoped);
+  }, [conversationMessages, threadId]);
+
+  // The summary rides the message payload and carries each Work's version / event
+  // / cost, so it changes on any real Work mutation (create, update, version bump)
+  // and stays put for non-Work tool_ends. When its *content* changes, this
+  // sidebar's own lazy caches — the history list and any expanded version
+  // timeline — are stale, so revalidate the mounted work keys. This is the sole
+  // owner of that freshness policy (the gateway transport keeps no Work-cache
+  // knowledge). `summaryData`'s identity flips on every message refetch, so gate
+  // on a deep-equal check to fire only on genuine Work changes; `refreshAll`
+  // touches only currently-mounted keys, so it's a no-op when nothing is open.
+  const prevSummaryRef = useRef(summaryData);
+  useEffect(() => {
+    if (isEqual(prevSummaryRef.current, summaryData)) return;
+    prevSummaryRef.current = summaryData;
+    void workService.refreshAll();
+  }, [summaryData]);
+
+  // History (version timeline) is heavier and genuinely on-demand — keep it on
+  // its own lazy fetch, gated so a collapsed / inactive sidebar never pulls it.
   const {
     data: historyData = [],
     error: historyError,
     isLoading: isHistoryLoading,
   } = useClientDataSWR<WorkListItem[]>(
-    mode === 'history' && topicId ? workKeys.conversation(topicId, threadId ?? null) : null,
+    mode === 'history' && topicId && active
+      ? workKeys.conversation(topicId, threadId ?? null)
+      : null,
     () => workService.listByConversation({ threadId, topicId }),
     {
       fallbackData: [],
@@ -336,8 +367,8 @@ const WorksSection = memo(() => {
     },
   );
 
-  const isLoading = mode === 'summary' ? isSummaryLoading : isHistoryLoading;
-  const error = mode === 'summary' ? summaryError : historyError;
+  const isLoading = mode === 'history' ? isHistoryLoading : false;
+  const error = mode === 'history' ? historyError : undefined;
   const data = mode === 'summary' ? summaryData : historyData;
 
   const content = (() => {

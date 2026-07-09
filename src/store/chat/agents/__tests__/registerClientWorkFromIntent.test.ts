@@ -5,7 +5,6 @@ const mocks = vi.hoisted(() => ({
   deleteTaskWork: vi.fn(),
   handleSkillToolResult: vi.fn(),
   refreshConversation: vi.fn(),
-  refreshRootOperation: vi.fn(),
   refreshVersions: vi.fn(),
   registerDocument: vi.fn(),
   registerTask: vi.fn(),
@@ -16,7 +15,6 @@ vi.mock('@/services/work', () => ({
     deleteTaskWork: mocks.deleteTaskWork,
     handleSkillToolResult: mocks.handleSkillToolResult,
     refreshConversation: mocks.refreshConversation,
-    refreshRootOperation: mocks.refreshRootOperation,
     refreshVersions: mocks.refreshVersions,
     registerDocument: mocks.registerDocument,
     registerTask: mocks.registerTask,
@@ -58,7 +56,6 @@ describe('registerClientWorkFromIntent', () => {
     mocks.deleteTaskWork.mockResolvedValue(undefined);
     mocks.handleSkillToolResult.mockResolvedValue({ id: 'skill-work-1' });
     mocks.refreshConversation.mockResolvedValue(undefined);
-    mocks.refreshRootOperation.mockResolvedValue(undefined);
     mocks.refreshVersions.mockResolvedValue(undefined);
   });
 
@@ -93,7 +90,6 @@ describe('registerClientWorkFromIntent', () => {
         }),
       );
       expect(mocks.refreshConversation).toHaveBeenCalledWith('topic-1', 'thread-1');
-      expect(mocks.refreshRootOperation).toHaveBeenCalledWith('op-root');
       expect(mocks.refreshVersions).toHaveBeenCalledWith('work-1');
     });
 
@@ -106,7 +102,6 @@ describe('registerClientWorkFromIntent', () => {
       expect(mocks.deleteTaskWork).toHaveBeenCalledWith({ taskId: 'task_1' });
       expect(mocks.registerTask).not.toHaveBeenCalled();
       expect(mocks.refreshConversation).toHaveBeenCalledWith('topic-1', 'thread-1');
-      expect(mocks.refreshRootOperation).toHaveBeenCalledWith('op-root');
       expect(mocks.refreshVersions).not.toHaveBeenCalled();
     });
 

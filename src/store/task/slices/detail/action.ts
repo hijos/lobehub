@@ -198,7 +198,10 @@ export class TaskDetailSliceActionImpl {
 
       await this.#get().refreshTaskList();
       try {
-        await workService.refreshAll();
+        // Deleting a task can orphan its Works across topics; the summary chips
+        // ride the message payload, so invalidate message lists too, not just
+        // the work-domain sidebar caches.
+        await workService.refreshAllConversations();
       } catch (error) {
         console.error('[task:deleteTask:refreshWork]', error);
       }

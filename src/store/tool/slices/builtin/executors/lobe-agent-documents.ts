@@ -14,8 +14,6 @@ import { electronSyncSelectors } from '@/store/electron/selectors';
 import { stashWorkIntent } from '@/utils/clientWorkIntentStash';
 
 interface DocumentWorkRefreshContext {
-  operationId?: string;
-  rootOperationId?: string;
   threadId?: string | null;
   topicId?: string;
 }
@@ -38,11 +36,9 @@ const buildDocumentShareUrl = (agentId: string, documentId: string): string | un
 const refreshDocumentWorks = async (context?: DocumentWorkRefreshContext) => {
   if (!context) return;
 
-  const rootOperationId = context.rootOperationId ?? context.operationId;
-  await Promise.all([
-    workService.refreshConversation(context.topicId, context.threadId),
-    workService.refreshRootOperation(rootOperationId),
-  ]).catch((error) => {
+  // Summary chips + sidebar summary ride the message payload, so refreshing the
+  // conversation (message list + sidebar history) covers them.
+  await workService.refreshConversation(context.topicId, context.threadId).catch((error) => {
     console.error('[AgentDocumentsExecutor] refresh document works failed:', error);
   });
 };

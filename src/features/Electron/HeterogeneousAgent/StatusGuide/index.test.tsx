@@ -33,20 +33,30 @@ vi.mock('@lobehub/ui', () => ({
   Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
 }));
 
-vi.mock('antd-style', () => ({
-  cssVar: {
-    colorBgElevated: 'transparent',
-    colorFillQuaternary: 'transparent',
-  },
-}));
+vi.mock('antd-style', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
 
-vi.mock('lucide-react', () => ({
-  Ban: () => <span>Ban Icon</span>,
-  ExternalLink: () => <span>ExternalLink Icon</span>,
-  Loader2: () => <span>Loader Icon</span>,
-  RotateCcw: () => <span>Retry Icon</span>,
-  Settings2: () => <span>Settings Icon</span>,
-}));
+  return {
+    ...actual,
+    cssVar: {
+      colorBgElevated: 'transparent',
+      colorFillQuaternary: 'transparent',
+    },
+  };
+});
+
+vi.mock('lucide-react', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+
+  return {
+    ...actual,
+    Ban: () => <span aria-hidden="true">Ban Icon</span>,
+    ExternalLink: () => <span aria-hidden="true">ExternalLink Icon</span>,
+    Loader2: () => <span aria-hidden="true">Loader Icon</span>,
+    RotateCcw: () => <span aria-hidden="true">Retry Icon</span>,
+    Settings2: () => <span aria-hidden="true">Settings Icon</span>,
+  };
+});
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({

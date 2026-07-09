@@ -14,8 +14,10 @@ import {
 import {
   type ComposioServiceSummary,
   type CredSummary,
+  excludeDisabledComposioServices,
   generateComposioServicesList,
   generateCredsList,
+  resolveAvailableComposioServices,
 } from '@lobechat/builtin-tool-creds';
 import { LocalSystemManifest } from '@lobechat/builtin-tool-local-system';
 import { builtinTools } from '@lobechat/builtin-tools';
@@ -62,7 +64,13 @@ import {
   CONTEXT_ENGINEERING_SPAN_NAME,
   tracer as agentRuntimeTracer,
 } from '@lobechat/observability-otel/modules/agent-runtime';
-import { type ChatToolPayload, type MessageToolCall, type UIChatMessage } from '@lobechat/types';
+import {
+  type ChatToolPayload,
+  getActivePluginIds,
+  getDisabledPluginIds,
+  type MessageToolCall,
+  type UIChatMessage,
+} from '@lobechat/types';
 import { sanitizeToolCallArguments, serializePartsForStorage } from '@lobechat/utils';
 import { type ExtendParamsType, ModelProvider } from 'model-bank';
 
@@ -95,11 +103,19 @@ import {
   sleep,
   timing,
 } from '../executorHelpers';
+import { resolveRunActiveDeviceId } from '../executors/resolveRunActiveDeviceId';
 import { formatErrorEventData } from '../formatErrorEventData';
 import { classifyLLMError } from '../llmErrorClassification';
 import { createConversationParentMissingError } from '../messagePersistErrors';
 import { VISIBLE_OUTPUT_END_PUBLISHED_STEP_INDEX_METADATA_KEY } from '../visibleOutputEnd';
-import { resolveRunActiveDeviceId } from './resolveRunActiveDeviceId';
+
+interface PreparedCallLLMContext {
+  assistantMessage: { id: string };
+  model: string;
+  parentId?: string;
+  provider: string;
+  stepLabel?: string;
+}
 
 const SERVER_LLM_RETRY_POLICY = {
   isEmptyCompletionError: (error: unknown) => error instanceof ModelEmptyError,
@@ -107,7 +123,7 @@ const SERVER_LLM_RETRY_POLICY = {
 };
 
 export const callLlm =
-  (ctx: RuntimeExecutorContext): InstructionExecutor =>
+  (ctx: RuntimeExecutorContext, prepared?: PreparedCallLLMContext): InstructionExecutor =>
   async (instruction, state) => {
     const { payload } = instruction as Extract<AgentInstruction, { type: 'call_llm' }>;
     const llmPayload = payload as CallLLMPayload;
@@ -116,8 +132,9 @@ export const callLlm =
     let visibleOutputEndPublishedStepIndex: number | undefined;
 
     // Fallback to state's modelRuntimeConfig if not in payload
-    const model = llmPayload.model || state.modelRuntimeConfig?.model;
-    const provider = llmPayload.provider || state.modelRuntimeConfig?.provider;
+    const model = prepared?.model ?? llmPayload.model ?? state.modelRuntimeConfig?.model;
+    const provider =
+      prepared?.provider ?? llmPayload.provider ?? state.modelRuntimeConfig?.provider;
     // Resolve tools via ToolResolver (unified tool injection).
     //
     // Single-track device gate: `buildStepToolDelta` treats activeDeviceId as
@@ -183,7 +200,8 @@ export const callLlm =
     log(`${stagePrefix} Starting operation`);
 
     // Get parentId from payload (parentId or parentMessageId depending on payload type)
-    const parentId = llmPayload.parentId || (llmPayload as any).parentMessageId;
+    const parentId =
+      prepared?.parentId ?? llmPayload.parentId ?? (llmPayload as any).parentMessageId;
 
     // Parent existence preflight ():
     // If the parent was deleted concurrently (e.g. user deleted topic mid-run),
@@ -191,7 +209,7 @@ export const callLlm =
     // already done the LLM call and spent tokens. Check first — fail fast,
     // save cost, and surface a typed error the frontend can act on instead of
     // a raw SQL error.
-    if (parentId) {
+    if (!prepared && parentId) {
       const parentExists = await ctx.messageModel.findById(parentId);
       if (!parentExists) {
         const error = createConversationParentMissingError(parentId);
@@ -214,7 +232,10 @@ export const callLlm =
     // refetch — chunks would silently no-op against the missing id (LOBE-11501).
     let assistantMessageSeed: Record<string, unknown> | undefined;
 
-    if (existingAssistantMessageId) {
+    if (prepared) {
+      assistantMessageItem = prepared.assistantMessage;
+      log(`${stagePrefix} Using prepared assistant message: %s`, assistantMessageItem.id);
+    } else if (existingAssistantMessageId) {
       // Use existing assistant message (created by execAgent)
       assistantMessageItem = { id: existingAssistantMessageId };
       log(`${stagePrefix} Using existing assistant message: %s`, existingAssistantMessageId);
@@ -238,30 +259,32 @@ export const callLlm =
     }
 
     // Publish stream start event
-    const stepLabel = (instruction as any).stepLabel;
-    await streamManager.publishStreamEvent(operationId, {
-      data: {
-        // Only the seed fields the client needs — not the whole DB row.
-        assistantMessage: {
-          id: assistantMessageItem.id,
-          ...(assistantMessageSeed && {
-            agentId: assistantMessageSeed.agentId,
-            groupId: assistantMessageSeed.groupId,
-            model: assistantMessageSeed.model,
-            parentId: assistantMessageSeed.parentId,
-            provider: assistantMessageSeed.provider,
-            role: assistantMessageSeed.role,
-            threadId: assistantMessageSeed.threadId,
-            topicId: assistantMessageSeed.topicId,
-          }),
+    const stepLabel = prepared?.stepLabel ?? (instruction as any).stepLabel;
+    if (!prepared) {
+      await streamManager.publishStreamEvent(operationId, {
+        data: {
+          // Only the seed fields the client needs — not the whole DB row.
+          assistantMessage: {
+            id: assistantMessageItem.id,
+            ...(assistantMessageSeed && {
+              agentId: assistantMessageSeed.agentId,
+              groupId: assistantMessageSeed.groupId,
+              model: assistantMessageSeed.model,
+              parentId: assistantMessageSeed.parentId,
+              provider: assistantMessageSeed.provider,
+              role: assistantMessageSeed.role,
+              threadId: assistantMessageSeed.threadId,
+              topicId: assistantMessageSeed.topicId,
+            }),
+          },
+          model,
+          provider,
+          ...(stepLabel && { stepLabel }),
         },
-        model,
-        provider,
-        ...(stepLabel && { stepLabel }),
-      },
-      stepIndex,
-      type: 'stream_start',
-    });
+        stepIndex,
+        type: 'stream_start',
+      });
+    }
 
     try {
       type ContentPart = { text: string; type: 'text' } | { image: string; type: 'image' };
@@ -646,12 +669,25 @@ export const callLlm =
                 )
                 .map((p) => p.identifier),
             );
-            const connected: ComposioServiceSummary[] = COMPOSIO_APP_TYPES.filter((t) =>
-              connectedIds.has(t.identifier),
+            // Disabled services are dropped from both lists — not surfaced as
+            // "connected, use directly" (this agent shouldn't use it) nor as
+            // "available to connect" (the account-level OAuth connection, if
+            // any, is untouched; this agent just isn't meant to see it).
+            let disabledIdSet = new Set<string>();
+            if (agentId) {
+              const agentModel = new AgentModel(ctx.serverDB, ctx.userId, ctx.workspaceId);
+              const agentConfig = await agentModel.getAgentConfigById(agentId);
+              disabledIdSet = new Set(getDisabledPluginIds(agentConfig?.plugins ?? undefined));
+            }
+            const connected: ComposioServiceSummary[] = excludeDisabledComposioServices(
+              COMPOSIO_APP_TYPES.filter((t) => connectedIds.has(t.identifier)),
+              disabledIdSet,
             ).map((t) => ({ identifier: t.identifier, name: t.label }));
-            const available: ComposioServiceSummary[] = COMPOSIO_APP_TYPES.filter(
-              (t) => !connectedIds.has(t.identifier),
-            ).map((t) => ({ identifier: t.identifier, name: t.label }));
+            const available = resolveAvailableComposioServices(
+              COMPOSIO_APP_TYPES,
+              connectedIds,
+              disabledIdSet,
+            );
             composioServicesListStr = generateComposioServicesList(connected, available);
             log(
               'Fetched Composio services for {{COMPOSIO_SERVICES_LIST}}: connected=%d, available=%d',
@@ -688,9 +724,9 @@ export const callLlm =
               // search API — can't see installable builtin/Composio tools or their
               // enabled/connected status, so the model may pick invalid ids or
               // claim a supported tool is unavailable.
-              const enabledPlugins: string[] = Array.isArray(editingConfig.plugins)
-                ? (editingConfig.plugins as string[])
-                : [];
+              const enabledPlugins: string[] = getActivePluginIds(
+                Array.isArray(editingConfig.plugins) ? editingConfig.plugins : undefined,
+              );
               const composioIdentifiers = new Set(COMPOSIO_APP_TYPES.map((t) => t.identifier));
               const officialTools: OfficialToolItem[] = [];
 
@@ -747,7 +783,7 @@ export const callLlm =
                   openingMessage: editingConfig.openingMessage ?? undefined,
                   openingQuestions: editingConfig.openingQuestions ?? undefined,
                   params: editingConfig.params ?? undefined,
-                  plugins: editingConfig.plugins ?? undefined,
+                  plugins: enabledPlugins,
                   provider: editingConfig.provider ?? undefined,
                   systemRole: editingConfig.systemRole ?? undefined,
                 },

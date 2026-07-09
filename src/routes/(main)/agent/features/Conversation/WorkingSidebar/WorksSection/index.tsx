@@ -27,7 +27,7 @@ import { useClientDataSWR } from '@/libs/swr';
 import { workKeys } from '@/libs/swr/keys';
 import { workService } from '@/services/work';
 import { useChatStore } from '@/store/chat';
-import { dbMessageSelectors } from '@/store/chat/selectors';
+import { dbMessageSelectors, operationSelectors } from '@/store/chat/selectors';
 import { formatWorkVersionCost } from '@/utils/workVersionCost';
 
 const TASK_STATUS_SET = new Set<TaskStatus>([
@@ -54,6 +54,7 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
     padding-inline: 8px 12px;
   `,
   context: css`
+    flex-shrink: 0;
     color: ${cssVar.colorTextTertiary};
   `,
   error: css`
@@ -79,6 +80,9 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
     min-width: 0;
     font-size: 14px;
     font-weight: 500;
+  `,
+  toggle: css`
+    flex-shrink: 0;
   `,
   versionCost: css`
     color: ${cssVar.colorTextTertiary};
@@ -232,7 +236,7 @@ const WorkVersionHistoryCard = memo<{ work: WorkListItem }>(({ work }) => {
         gap={8}
         onClick={() => setExpanded((value) => !value)}
       >
-        <ToggleIcon size={16} />
+        <ToggleIcon className={styles.toggle} size={16} />
         {work.type === 'task' ? (
           <>
             <TaskPriorityTag disableDropdown priority={work.task.priority} size={14} />
@@ -322,6 +326,14 @@ const WorksSection = memo<WorksSectionProps>(({ active = true }) => {
   );
   const topicId = useChatStore((s) => s.activeTopicId);
   const threadId = useChatStore((s) => s.activeThreadId);
+  const agentId = useChatStore((s) => s.activeAgentId);
+  // Is the active conversation's agent runtime still running this round? Work
+  // summaries mutate on every tool_end during a run, but the lazy caches below
+  // are an operation-grained concern — suppress their refresh until the run
+  // settles (done / error / abort all clear this flag).
+  const isRunning = useChatStore(
+    operationSelectors.isAgentRuntimeRunningByContext({ agentId, threadId, topicId }),
+  );
 
   // Summary rides the message payload — read Work summaries straight from the
   // active conversation's raw messages (scoped to the active thread) instead of
@@ -334,21 +346,30 @@ const WorksSection = memo<WorksSectionProps>(({ active = true }) => {
     return getAllWorkSummaries(scoped);
   }, [conversationMessages, threadId]);
 
-  // The summary rides the message payload and carries each Work's version / event
-  // / cost, so it changes on any real Work mutation (create, update, version bump)
-  // and stays put for non-Work tool_ends. When its *content* changes, this
-  // sidebar's own lazy caches — the history list and any expanded version
-  // timeline — are stale, so revalidate the mounted work keys. This is the sole
-  // owner of that freshness policy (the gateway transport keeps no Work-cache
-  // knowledge). `summaryData`'s identity flips on every message refetch, so gate
-  // on a deep-equal check to fire only on genuine Work changes; `refreshAll`
-  // touches only currently-mounted keys, so it's a no-op when nothing is open.
+  // The summary rides the message payload and carries each Work's version /
+  // event / cost, so it changes on any real Work mutation (create, update,
+  // version bump). When its *content* changes, this sidebar's own lazy caches —
+  // the history list and any expanded version timeline — are stale, so
+  // revalidate the mounted work keys. This is the sole owner of that freshness
+  // policy (the gateway transport keeps no Work-cache knowledge).
+  //
+  // These lazy views are an operation-grained concern, so while a run is active
+  // we suppress the refresh entirely (the summary chips still update live off
+  // the payload) and let the effect re-run when `isRunning` flips false at
+  // operation end — a single deep-equal diff against the pre-run snapshot then
+  // fires exactly one refresh for the whole round, instead of one per tool_end
+  // (which flooded `work.listByConversation`). Non-streaming Work edits still
+  // refresh immediately since `isRunning` is already false. `prevSummaryRef` is
+  // only advanced when we actually refresh, so intra-run changes stay pending;
+  // `refreshConversationViews` touches only mounted keys, so it's a no-op when
+  // the sidebar is collapsed or on the summary view.
   const prevSummaryRef = useRef(summaryData);
   useEffect(() => {
+    if (isRunning) return;
     if (isEqual(prevSummaryRef.current, summaryData)) return;
     prevSummaryRef.current = summaryData;
-    void workService.refreshAll();
-  }, [summaryData]);
+    void workService.refreshConversationViews(topicId, threadId);
+  }, [summaryData, isRunning, topicId, threadId]);
 
   // History (version timeline) is heavier and genuinely on-demand — keep it on
   // its own lazy fetch, gated so a collapsed / inactive sidebar never pulls it.

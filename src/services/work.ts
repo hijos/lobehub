@@ -100,6 +100,28 @@ class WorkService {
   };
 
   /**
+   * Refresh only the sidebar's *lazy* Work caches for a conversation — the
+   * history list ({@link workKeys.conversation}) and any expanded version
+   * timelines ({@link workKeys.versions}). Deliberately narrower than
+   * {@link refreshAll}: it never touches the `message:list` payload (Work
+   * summaries ride the message list and are refreshed by the message fetch
+   * itself) nor the cross-topic workspace gallery (`work:workspace`).
+   *
+   * Called once per agent run at operation end (see WorksSection) instead of on
+   * every tool_end: these lazy views are an operation-grained concern, so a
+   * single settle-time refresh replaces the per-tool `work.listByConversation`
+   * flood. `mutate` only revalidates mounted keys, so this is a no-op when the
+   * sidebar is collapsed or showing the summary view.
+   */
+  refreshConversationViews = async (topicId?: string | null, threadId?: string | null) => {
+    if (!topicId) return;
+    await Promise.all([
+      mutate(workKeys.conversation(topicId, threadId ?? null)),
+      mutate((key) => Array.isArray(key) && key[0] === workKeys.versions.root),
+    ]);
+  };
+
+  /**
    * Broad invalidation for Work mutations without a single-topic scope (e.g.
    * task deletion, which can orphan Works across topics into a "task deleted"
    * state). Refreshes every mounted `message:list` — since Work summaries ride

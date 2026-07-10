@@ -207,10 +207,17 @@ export const composioRouter = router({
 
       // Composio-managed OAuth auth configs no longer support `initiate`; use
       // `link` (POST /api/v3/connected_accounts/link) to get the redirect URL.
+      //
+      // `allowMultiple` for agent connections: Composio rejects a second linked
+      // account for the same (user entity, auth config) unless this is set. An
+      // agent connector is intentionally a *separate* account from the user's
+      // (and from other agents'), all under the same Composio user entity but
+      // distinguished by connectedAccountId — so agent links must allow multiple.
+      // Personal connections keep the default (one account per auth config).
       const connReq = await (ctx.composioClient.connectedAccounts as any).link(
         userId,
         authConfigId,
-        { callbackUrl },
+        { callbackUrl, ...(agentId ? { allowMultiple: true } : {}) },
       );
 
       let rawTools: any[] = [];

@@ -104,7 +104,7 @@ describe('registerClientWorkFromIntent', () => {
     it('is a no-op for a create/update intent without a role', async () => {
       await registerClientWorkFromIntent({
         ...base,
-        // @ts-expect-error deliberately malformed: create intent missing role
+        // deliberately malformed: create intent missing role
         intent: { action: 'create', targets: [{ taskId: 'task_1' }], type: 'task' },
       });
 

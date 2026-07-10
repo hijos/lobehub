@@ -634,6 +634,36 @@ export const callLlm =
                 if (answerSalvagedFromReasoning) {
                   metadata.answerSalvagedFromReasoning = true;
                 }
+                // Work display anchor: Work cards render on the FINAL assistant
+                // message of a turn (stable across the two-round tool flow), so
+                // stamp `metadata.work` only when this LLM step ends the turn —
+                // i.e. it emits no new tool calls AND at least one tool ran
+                // earlier in this operation (messages after sourceMessageId, the
+                // triggering user message). Without the prior-tool check every
+                // plain answer would get a work anchor; without the slice the
+                // scan would see other turns' tool messages.
+                const sourceMessageId = state.metadata?.sourceMessageId;
+                const sourceMessageIndex =
+                  typeof sourceMessageId === 'string'
+                    ? state.messages.findIndex((message) => message.id === sourceMessageId)
+                    : -1;
+                const currentOperationMessages =
+                  sourceMessageIndex >= 0 ? state.messages.slice(sourceMessageIndex + 1) : [];
+                const hasPriorToolInteraction = currentOperationMessages.some(
+                  (message) =>
+                    message.role === 'tool' ||
+                    (Array.isArray(message.tool_calls) && message.tool_calls.length > 0),
+                );
+                if (
+                  toolsCalling.length === 0 &&
+                  tool_calls.length === 0 &&
+                  hasPriorToolInteraction
+                ) {
+                  metadata.work = {
+                    rootOperationId: operationId,
+                    ...(typeof sourceMessageId === 'string' && { userMessageId: sourceMessageId }),
+                  };
+                }
 
                 // Sanitize tool_call `arguments` before persisting to DB so malformed
                 // JSON (e.g. Qwen emitting `{, ...}`) can't poison future context

@@ -45,25 +45,27 @@ describe('WorkModel · linear', () => {
     // version that renames the issue.
     const originalTransaction = serverDB.transaction.bind(serverDB);
     let raced = false;
-    const transactionSpy = vi
-      .spyOn(serverDB, 'transaction')
-      .mockImplementation(async (callback: never) => {
-        if (raced) return originalTransaction(callback);
-        raced = true;
+    // Drizzle's transaction signature gained an optional config param upstream;
+    // the spy only exercises the callback path, so widen via cast.
+    const transactionSpy = vi.spyOn(serverDB, 'transaction').mockImplementation((async (
+      callback: never,
+    ) => {
+      if (raced) return originalTransaction(callback);
+      raced = true;
 
-        await workModel.registerLinear({
-          ...baseParams,
-          patchFields: ['title'],
-          role: 'updated',
-          rootOperationId: 'op-race-winner',
-          sourceToolCallId: 'tool-call-race-winner',
-          title: 'Winner title',
-        });
-
-        throw new Error(
-          'duplicate key value violates unique constraint "work_versions_work_id_version_unique"',
-        );
+      await workModel.registerLinear({
+        ...baseParams,
+        patchFields: ['title'],
+        role: 'updated',
+        rootOperationId: 'op-race-winner',
+        sourceToolCallId: 'tool-call-race-winner',
+        title: 'Winner title',
       });
+
+      throw new Error(
+        'duplicate key value violates unique constraint "work_versions_work_id_version_unique"',
+      );
+    }) as never);
 
     try {
       await workModel.registerLinear({

@@ -27,8 +27,20 @@ const workProcedureWrite = workProcedure.use(withScopedPermission('agent:update'
 
 const versionRoleSchema = z.enum(['created', 'updated']);
 
+const cumulativeUsageSchema = z.object({
+  capturedAt: z.string(),
+  cost: z.unknown().optional(),
+  usage: z.unknown().optional(),
+}) satisfies z.ZodType<WorkVersionCumulativeUsage>;
+
+// Every register* schema must accept `cumulativeCost` / `cumulativeUsage`: the
+// client-first runtime stamps the tool call's cumulative cost onto the
+// registration (see registerClientWorkFromIntent), and `z.object` strips
+// undeclared keys — omitting them here silently stores cost-less versions.
 const registerTaskSchema = z.object({
   actorAgentId: z.string().nullable().optional(),
+  cumulativeCost: z.number().nullable().optional(),
+  cumulativeUsage: cumulativeUsageSchema.nullable().optional(),
   role: versionRoleSchema,
   rootOperationId: z.string().nullable().optional(),
   source: z.string().min(1),
@@ -43,6 +55,8 @@ const registerTaskSchema = z.object({
 const registerSkillToolResultSchema = z.object({
   actorAgentId: z.string().nullable().optional(),
   args: z.record(z.unknown()).optional(),
+  cumulativeCost: z.number().nullable().optional(),
+  cumulativeUsage: cumulativeUsageSchema.nullable().optional(),
   data: z.unknown().optional(),
   provider: z.string().min(1),
   rootOperationId: z.string().nullable().optional(),
@@ -52,12 +66,6 @@ const registerSkillToolResultSchema = z.object({
   toolName: z.string().min(1),
   topicId: z.string().nullable().optional(),
 }) satisfies z.ZodType<RegisterSkillToolResultWorkParams>;
-
-const cumulativeUsageSchema = z.object({
-  capturedAt: z.string(),
-  cost: z.unknown().optional(),
-  usage: z.unknown().optional(),
-}) satisfies z.ZodType<WorkVersionCumulativeUsage>;
 
 const registerDocumentSchema = z.object({
   actorAgentId: z.string().nullable().optional(),

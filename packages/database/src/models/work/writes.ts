@@ -8,6 +8,7 @@ import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 
 import { documents } from '../../schemas/file';
 import { works, workVersions } from '../../schemas/work';
+import type { LobeChatDatabase } from '../../type';
 import { documentOwnership, versionOwnership, type WorkContext, workOwnership } from './context';
 import type { CreateVersionInput, WorkVersionEventParams } from './internal';
 
@@ -87,26 +88,52 @@ export const resolveWorkUpsertConflict = (ctx: WorkContext) =>
  * works.currentVersionId, and retry on unique-violation races (either the
  * `(workId, version)` or the `(workId, sourceToolCallId)` unique index).
  *
- * `buildInput` runs inside every retry attempt on purpose: a retry means a
- * concurrent registration for the same Work won the version race, so inputs
- * patch-merged against the previous snapshot (linear/github) must be rebuilt
- * from the winner's committed state — reusing the pre-race merge would
- * silently revert the winner's fields.
+ * `buildInput` runs inside the transaction, after a `FOR UPDATE` lock on the
+ * works row (same pattern as `TopicModel.updateMetadata`): a concurrent
+ * registration holds that lock until its commit, so the merge base read here
+ * (linear/github patch-merge against the previous snapshot) always sees the
+ * winner's committed state. Without the lock, a stale merge could allocate the
+ * next version number cleanly — never hitting the unique-violation retry — and
+ * silently revert fields the concurrent registration just wrote. Callers must
+ * do their reads through the tx-scoped context `buildInput` receives.
  */
 export const createVersion = async (
   ctx: WorkContext,
   work: WorkItem,
   params: WorkVersionEventParams,
-  buildInput: () => CreateVersionInput | Promise<CreateVersionInput>,
+  buildInput: (txCtx: WorkContext) => CreateVersionInput | Promise<CreateVersionInput>,
 ): Promise<WorkVersionItem> => {
   const existing = await findVersionBySourceToolCall(ctx, work.id, params.sourceToolCallId);
   if (existing) return existing;
 
   for (let attempt = 0; attempt < MAX_VERSION_CREATE_RETRIES; attempt += 1) {
-    const { metadata, snapshot } = await buildInput();
-
     try {
       return await ctx.db.transaction(async (tx) => {
+        const txCtx: WorkContext = { ...ctx, db: tx as LobeChatDatabase };
+
+        const [locked] = await tx
+          .select({ id: works.id })
+          .from(works)
+          .where(and(eq(works.id, work.id), workOwnership(ctx)))
+          .for('update');
+        // The Work row vanished between upsert and here (e.g. a concurrent
+        // deleteTaskWork); inserting a version would only FK-fail, so bail
+        // with a clearer error.
+        if (!locked) throw new Error(`Work ${work.id} no longer exists`);
+
+        // Re-check dedupe under the lock: a concurrent registration with the
+        // same sourceToolCallId that committed before we acquired the lock is
+        // now visible, so return its version instead of tripping the
+        // `(workId, sourceToolCallId)` unique index.
+        const dedupedUnderLock = await findVersionBySourceToolCall(
+          txCtx,
+          work.id,
+          params.sourceToolCallId,
+        );
+        if (dedupedUnderLock) return dedupedUnderLock;
+
+        const { metadata, snapshot } = await buildInput(txCtx);
+
         const now = new Date();
         const [next] = await tx
           .select({

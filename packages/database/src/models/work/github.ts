@@ -109,10 +109,11 @@ const createGithubVersion = async (
   work: WorkItem,
   params: Omit<RegisterGithubWorkParams, 'resourceId'> & { resourceId: string },
 ): Promise<WorkVersionItem> =>
-  createVersion(ctx, work, params, async () => {
-    // Re-read on every attempt (see createVersion): the patch-merge base must
-    // be the race winner's committed snapshot, not the pre-race one.
-    const previousSnapshot = await findCurrentGithubSnapshot(ctx, work.id);
+  createVersion(ctx, work, params, async (txCtx) => {
+    // Read through the tx-scoped context (see createVersion): the works row is
+    // locked, so the patch-merge base is a concurrent winner's committed
+    // snapshot, never a stale pre-race one.
+    const previousSnapshot = await findCurrentGithubSnapshot(txCtx, work.id);
     return { snapshot: githubSnapshot(params, previousSnapshot) };
   });
 

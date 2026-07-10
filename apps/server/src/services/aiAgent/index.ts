@@ -482,7 +482,7 @@ export class AiAgentService {
       workspaceId: wsId,
     });
     this.marketService = new MarketService({ userInfo: { userId } });
-    this.composioService = new ComposioService({ db, userId });
+    this.composioService = new ComposioService({ db, userId, workspaceId: wsId });
   }
 
   private async resolveOperationTaskId(
@@ -2295,7 +2295,11 @@ export class AiAgentService {
       }
       const connectors =
         agentPlugins.length > 0
-          ? await this.connectorModel.queryByIdentifiers(agentPlugins, connectorGateKeeper)
+          ? await this.connectorModel.resolveByIdentifiers(
+              agentPlugins,
+              resolvedAgentId,
+              connectorGateKeeper,
+            )
           : [];
 
       // Only connectors WITH a real MCP endpoint (mcpServerUrl or stdio) can replace plugins in the
@@ -2346,7 +2350,7 @@ export class AiAgentService {
 
       // 5d. Fetch Composio tool manifests from database
       try {
-        composioManifests = await this.composioService.getComposioManifests();
+        composioManifests = await this.composioService.getComposioManifests(resolvedAgentId);
       } catch (error) {
         log('execAgent: failed to fetch composio manifests: %O', error);
       }
@@ -2372,7 +2376,7 @@ export class AiAgentService {
           ];
           const connectorEntries =
             allIdentifiers.length > 0
-              ? await this.connectorModel.queryByIdentifiers(allIdentifiers)
+              ? await this.connectorModel.resolveByIdentifiers(allIdentifiers, resolvedAgentId)
               : [];
 
           if (connectorEntries.length > 0) {

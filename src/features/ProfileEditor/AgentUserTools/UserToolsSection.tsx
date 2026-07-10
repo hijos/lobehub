@@ -1,16 +1,14 @@
 'use client';
 
 import { getActivePluginIds } from '@lobechat/types';
-import { Flexbox, Icon, Tag, Text } from '@lobehub/ui';
+import { Flexbox, Text } from '@lobehub/ui';
 import { Button } from '@lobehub/ui/base-ui';
-import { McpIcon } from '@lobehub/ui/icons';
-import { cssVar } from 'antd-style';
 import isEqual from 'fast-deep-equal';
-import { CheckIcon } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import SharedAgentTool, { type AgentToolProps } from '@/features/ProfileEditor/AgentTool';
+import PluginTag from '@/features/ProfileEditor/PluginTag';
 import { useAgentStore } from '@/store/agent';
 import { agentSelectors } from '@/store/agent/selectors';
 import { useToolStore } from '@/store/tool';
@@ -67,25 +65,15 @@ const UserToolsSection = memo<Props>(
                 {t('settingAgent.agentTools.pickerEmpty')}
               </Text>
             )}
-            {copyable.map((c) => {
-              const isSel = selected.has(c.id);
-              return (
-                <Tag
-                  icon={<Icon icon={isSel ? CheckIcon : McpIcon} size={14} />}
-                  key={c.id}
-                  style={{
-                    cursor: 'pointer',
-                    ...(isSel && {
-                      background: cssVar.colorPrimaryBg,
-                      borderColor: cssVar.colorPrimary,
-                    }),
-                  }}
-                  onClick={() => toggleSelected(c.id)}
-                >
-                  {c.name || c.identifier}
-                </Tag>
-              );
-            })}
+            {copyable.map((c) => (
+              <PluginTag
+                selectable
+                key={c.id}
+                pluginId={c.identifier}
+                selected={selected.has(c.id)}
+                onSelect={() => toggleSelected(c.id)}
+              />
+            ))}
           </Flexbox>
         </Flexbox>
       );

@@ -2,11 +2,11 @@
 
 import { type ComposioAppType, type LobehubSkillProviderType } from '@lobechat/const';
 import { COMPOSIO_APP_TYPES, LOBEHUB_SKILL_PROVIDERS } from '@lobechat/const';
-import { Avatar, Icon, Tag } from '@lobehub/ui';
+import { Avatar, Flexbox, Icon, Tag } from '@lobehub/ui';
 import { McpIcon } from '@lobehub/ui/icons';
 import { createStaticStyles, cssVar } from 'antd-style';
 import isEqual from 'fast-deep-equal';
-import { AlertCircle, Loader2, X } from 'lucide-react';
+import { AlertCircle, Loader2, Square, SquareCheckBig, X } from 'lucide-react';
 import React, { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -86,8 +86,17 @@ export interface PluginTagProps {
    */
   agentId?: string;
   disabled?: boolean;
-  onRemove: (e: React.MouseEvent) => void;
+  onRemove?: (e: React.MouseEvent) => void;
+  /** Fires when the checkbox/tag is toggled in `selectable` mode. */
+  onSelect?: () => void;
   pluginId: string | { enabled: boolean; identifier: string; settings: Record<string, any> };
+  /**
+   * Render as a selectable chip: a leading checkbox, no remove (×) button, and
+   * the whole tag toggles selection. Used by the multi-select "copy" flow.
+   */
+  selectable?: boolean;
+  /** Selection state in `selectable` mode. */
+  selected?: boolean;
   /**
    * Whether to show "Desktop Only" label for tools not available in web
    * @default false
@@ -105,6 +114,9 @@ const PluginTag = memo<PluginTagProps>(
     agentId,
     pluginId,
     onRemove,
+    onSelect,
+    selectable = false,
+    selected = false,
     disabled,
     showDesktopOnlyLabel = false,
     useAllMetaList = false,
@@ -339,20 +351,35 @@ const PluginTag = memo<PluginTagProps>(
     return (
       <Tag
         className={styles.tag}
-        closable={!disabled}
+        closable={!disabled && !selectable}
         closeIcon={<X size={12} />}
         color={showErrorState ? 'error' : undefined}
-        icon={renderIcon()}
+        style={selectable ? { cursor: 'pointer' } : undefined}
         variant={isDarkMode ? 'filled' : 'outlined'}
+        icon={
+          selectable ? (
+            <Flexbox horizontal align={'center'} gap={6}>
+              <Icon
+                icon={selected ? SquareCheckBig : Square}
+                size={14}
+                style={{ color: selected ? cssVar.colorPrimary : cssVar.colorTextQuaternary }}
+              />
+              {renderIcon()}
+            </Flexbox>
+          ) : (
+            renderIcon()
+          )
+        }
         title={
           showErrorState
             ? t('tools.notInstalledWarning', { defaultValue: 'This tool is not installed' })
             : undefined
         }
+        onClick={selectable ? onSelect : undefined}
         onClose={(e) => {
           if (disabled) return;
 
-          onRemove(e);
+          onRemove?.(e);
         }}
       >
         {getDisplayText()}

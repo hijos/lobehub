@@ -90,15 +90,16 @@ const WorkSummaryCard = memo<WorkSummaryCardProps>(({ className, item, onOpen })
         ? item.github.title
         : item.task.name;
   const title = snapshotTitle?.trim() || item.resourceIdentifier || item.resourceId;
-  // Summary payloads slim long free-text (linear content / github body capped
-  // server-side); prefer description, then short body/status — never full docs.
+  // Summary payloads slim long free-text (linear content / github body / task
+  // instruction capped server-side); prefer description, then short
+  // body/status — never full docs.
   const description = isDocument
     ? item.document.description?.trim()
     : isLinear
       ? (item.linear.description || item.linear.status)?.trim()
       : isGithub
         ? (item.github.body || item.github.state)?.trim()
-        : item.task.description?.trim();
+        : item.task.instruction?.trim();
   const Icon = isDocument
     ? FileTextIcon
     : isLinear

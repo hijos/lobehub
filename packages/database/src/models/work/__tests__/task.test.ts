@@ -299,8 +299,42 @@ describe('WorkModel · task', () => {
     });
     // Cost is written once at insert time and summed across the two operations.
     expect(summary.totalCost).toBeCloseTo(0.000_987, 6);
-    // Summary description comes from the current version snapshot, not the live task row.
-    expect(summary.task.description).toBe('Updated description');
+    // Instruction is the card preview text; like name/status it coalesces the
+    // live task row onto the version snapshot.
+    expect(summary.task.instruction).toBe('Updated instruction');
+  });
+
+  it('surfaces the instruction as the card preview on every list path', async () => {
+    const taskModel = new TaskModel(serverDB, userId);
+    const workModel = new WorkModel(serverDB, userId);
+    const task = await taskModel.create({
+      instruction: 'Print the current date with Python',
+      name: 'Greeting test',
+    });
+
+    await workModel.registerTask({
+      role: 'created',
+      rootOperationId: 'op-instruction-preview',
+      source: 'createTask',
+      sourceToolCallId: 'tool-call-instruction-preview',
+      taskId: task.id,
+      threadId,
+      topicId,
+    });
+
+    // Conversation list path (live tasks join).
+    const byConversation = await workModel.listByConversation({ threadId, topicId });
+    expect(byConversation).toHaveLength(1);
+    expect(byConversation[0]).toMatchObject({
+      task: expect.objectContaining({ instruction: 'Print the current date with Python' }),
+    });
+
+    // Summary path (snapshot projection).
+    const byOperation = await workModel.listSummariesByRootOperations({
+      rootOperationIds: ['op-instruction-preview'],
+    });
+    const summary = expectTaskSummaryItem(byOperation['op-instruction-preview']?.[0]);
+    expect(summary.task.instruction).toBe('Print the current date with Python');
   });
 
   it('does not double-count cumulative cost snapshots within the same operation', async () => {

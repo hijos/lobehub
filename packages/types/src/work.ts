@@ -184,7 +184,11 @@ export type WorkVersionPreview = Pick<
 export interface TaskWorkListItem extends WorkItem {
   resourceType: 'task';
   task: {
-    description: string | null;
+    /**
+     * Card preview text: the task's instruction (NOT NULL on live rows),
+     * truncated server-side — never the full text.
+     */
+    instruction: string | null;
     name: string | null;
     priority: number | null;
     status: TaskStatus | string | null;

@@ -18,11 +18,11 @@ import type {
   WorkVersionItem,
 } from '@lobechat/types';
 import type { SQL } from 'drizzle-orm';
-import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, or } from 'drizzle-orm';
 
 import { tasks } from '../../schemas/task';
 import { works, workVersions } from '../../schemas/work';
-import { taskOwnership, versionOwnership, type WorkContext, workOwnership } from './context';
+import { versionOwnership, type WorkContext, workOwnership } from './context';
 import { getTotalCostByWorkIds } from './cost';
 import {
   listDocumentVersionEvents,
@@ -210,28 +210,13 @@ export const listByConversation = async (
       eventCreatedAt: workVersions.createdAt,
       // LEFT JOIN so orphaned task Works still surface; live columns coalesce
       // onto the current-version snapshot and `tasks.id is null` flags deletion.
-      taskDeleted: sql<boolean>`${tasks.id} is null`,
-      taskDescription: sql<
-        string | null
-      >`coalesce(${tasks.description}, ${currentVersions.snapshot}->'task'->>'description')`,
-      taskName: sql<
-        string | null
-      >`coalesce(${tasks.name}, ${currentVersions.snapshot}->'task'->>'name')`,
-      taskPriority: sql<
-        number | null
-      >`coalesce(${tasks.priority}, (${currentVersions.snapshot}->'task'->>'priority')::integer)`,
-      taskStatus: sql<
-        string | null
-      >`coalesce(${tasks.status}, ${currentVersions.snapshot}->'task'->>'status')`,
+      ...taskSummaryFields(currentVersions.snapshot),
       work: works,
     })
     .from(workVersions)
     .innerJoin(works, and(eq(workVersions.workId, works.id), workOwnership(ctx)))
     .innerJoin(currentVersions, eq(works.currentVersionId, currentVersions.id))
-    .leftJoin(
-      tasks,
-      and(eq(works.resourceType, 'task'), eq(works.resourceId, tasks.id), taskOwnership(ctx)),
-    )
+    .leftJoin(tasks, taskSummaryJoin(ctx))
     .where(
       and(
         versionOwnership(ctx),
@@ -279,12 +264,12 @@ export const listByConversation = async (
         ...row.work,
         resourceType: 'task' as const,
         task: {
-          description: truncateSummaryText(row.taskDescription),
-          name: row.taskName,
-          priority: row.taskPriority,
-          status: row.taskStatus,
+          instruction: truncateSummaryText(row.task.instruction),
+          name: row.task.name,
+          priority: row.task.priority,
+          status: row.task.status,
         },
-        taskDeleted: row.taskDeleted,
+        taskDeleted: row.task.deleted,
         type: 'task' as const,
       } satisfies TaskWorkListItem,
     })),
@@ -494,12 +479,12 @@ export const listByWorkspace = async (
           ...base,
           resourceType: 'task',
           task: {
-            description: truncateSummaryText(row.taskDescription),
-            name: row.taskName,
-            priority: row.taskPriority,
-            status: row.taskStatus,
+            instruction: truncateSummaryText(row.task.instruction),
+            name: row.task.name,
+            priority: row.task.priority,
+            status: row.task.status,
           },
-          taskDeleted: row.taskDeleted,
+          taskDeleted: row.task.deleted,
           type: 'task',
         };
       }

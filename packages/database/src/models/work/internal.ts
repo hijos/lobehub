@@ -101,11 +101,8 @@ export const versionEventSelection = {
 
 export interface TaskWorkSummaryQueryRow {
   event: WorkVersionPreview;
-  taskDeleted: TaskWorkListItem['taskDeleted'];
-  taskDescription: TaskWorkListItem['task']['description'];
-  taskName: TaskWorkListItem['task']['name'];
-  taskPriority: TaskWorkListItem['task']['priority'];
-  taskStatus: TaskWorkListItem['task']['status'];
+  /** Live-coalesced task columns; `deleted` flags a missing live row. */
+  task: TaskWorkListItem['task'] & { deleted: TaskWorkListItem['taskDeleted'] };
   version: TaskWorkSummaryItem['version'];
   work: WorkItem;
 }
@@ -134,21 +131,25 @@ export const snapshotField = <Snapshot>(
  * columns take priority; a LEFT JOIN miss (task deleted without the tool path)
  * nulls the whole `tasks` row, so name/priority/status coalesce onto
  * `snapshotColumn` (the version snapshot) and `tasks.id is null` becomes the
- * orphan-deletion signal. `taskDescription` stays snapshot-only by design (no
- * coalesce) — description isn't part of the summary's live-data contract.
- * `snapshotColumn` is `workVersions.snapshot` for event rows or
+ * orphan-deletion signal. `instruction` (NOT NULL on live rows) is the card
+ * preview text — the optional short `description` is deliberately not
+ * surfaced. `snapshotColumn` is `workVersions.snapshot` for event rows or
  * `currentVersions.snapshot` for summary rows.
  */
 export const taskSummaryFields = (
   snapshotColumn: (typeof workVersions)['snapshot'] | (typeof currentVersions)['snapshot'],
 ) => ({
-  taskDeleted: sql<boolean>`${tasks.id} is null`,
-  taskDescription: sql<string | null>`${snapshotColumn}->'task'->>'description'`,
-  taskName: sql<string | null>`coalesce(${tasks.name}, ${snapshotColumn}->'task'->>'name')`,
-  taskPriority: sql<
-    number | null
-  >`coalesce(${tasks.priority}, (${snapshotColumn}->'task'->>'priority')::integer)`,
-  taskStatus: sql<string | null>`coalesce(${tasks.status}, ${snapshotColumn}->'task'->>'status')`,
+  task: {
+    deleted: sql<boolean>`${tasks.id} is null`,
+    instruction: sql<
+      string | null
+    >`coalesce(${tasks.instruction}, ${snapshotColumn}->'task'->>'instruction')`,
+    name: sql<string | null>`coalesce(${tasks.name}, ${snapshotColumn}->'task'->>'name')`,
+    priority: sql<
+      number | null
+    >`coalesce(${tasks.priority}, (${snapshotColumn}->'task'->>'priority')::integer)`,
+    status: sql<string | null>`coalesce(${tasks.status}, ${snapshotColumn}->'task'->>'status')`,
+  },
 });
 
 /**

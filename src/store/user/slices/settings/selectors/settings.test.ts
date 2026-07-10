@@ -78,7 +78,21 @@ describe('settingsSelectors', () => {
 
       const result = settingsSelectors.defaultAgent(s);
 
-      expect(result).toMatchSnapshot();
+      expect(result.config.systemRole).toBe('user');
+      expect(result.config.model).toBe('gpt-3.5-turbo');
+      expect(result.config.provider).toBeTruthy();
+      expect(result.meta).toEqual({
+        avatar: 'agent-avatar.jpg',
+        description: 'Test agent',
+      });
+      expect(result.config.params).toEqual(
+        expect.objectContaining({
+          frequency_penalty: 0,
+          presence_penalty: 0,
+          temperature: 1,
+          top_p: 1,
+        }),
+      );
     });
   });
 
@@ -173,7 +187,17 @@ describe('settingsSelectors', () => {
 
       const result = settingsSelectors.defaultAgentConfig(s);
 
-      expect(result).toMatchSnapshot();
+      expect(result.systemRole).toBe('custom role');
+      expect(result.model).toBe('gpt-4');
+      expect(result.provider).toBeTruthy();
+      expect(result.params).toEqual(
+        expect.objectContaining({
+          frequency_penalty: 0,
+          presence_penalty: 0,
+          temperature: 0.7,
+          top_p: 1,
+        }),
+      );
     });
   });
 
@@ -211,7 +235,13 @@ describe('settingsSelectors', () => {
 
       const result = settingsSelectors.currentSystemAgent(s);
 
-      expect(result).toMatchSnapshot();
+      expect(result.enableAutoReply).toBe(true);
+      expect(result.replyMessage).toBe('Custom auto reply');
+      expect(result.agentMeta.provider).toBeTruthy();
+      expect(result.historyCompress.provider).toBe(result.agentMeta.provider);
+      expect(result.memoryAnalysisAgentConfig.provider).toBeTruthy();
+      expect(result.userMemoryEmbedding.provider).toBeTruthy();
+      expect(result.translation.model).toBeTruthy();
     });
   });
 

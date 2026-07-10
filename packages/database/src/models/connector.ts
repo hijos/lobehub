@@ -6,7 +6,7 @@ import type {
   NewUserConnector,
   UserConnectorItem,
 } from '../schemas';
-import { userConnectors } from '../schemas';
+import { userConnectors, userConnectorTools } from '../schemas';
 import type { LobeChatDatabase } from '../type';
 import { buildWorkspacePayload, buildWorkspaceWhere } from '../utils/workspace';
 
@@ -148,6 +148,22 @@ export class ConnectorModel {
       .insert(userConnectors)
       .values({ ...rest, agentId, metadata: cleanedMetadata })
       .returning();
+
+    // Clone the connector's tools (user_connector_tools) onto the new row —
+    // otherwise the copy has no callable tools and the runtime resolves nothing.
+    const sourceTools = await this.db
+      .select()
+      .from(userConnectorTools)
+      .where(eq(userConnectorTools.userConnectorId, sourceId));
+
+    if (sourceTools.length > 0) {
+      await this.db.insert(userConnectorTools).values(
+        sourceTools.map(({ id: _toolId, createdAt: _tc, updatedAt: _tu, ...toolRest }) => ({
+          ...toolRest,
+          userConnectorId: created.id,
+        })),
+      );
+    }
 
     return created;
   };

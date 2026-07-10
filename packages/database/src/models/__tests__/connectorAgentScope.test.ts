@@ -1,7 +1,8 @@
+import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { getTestDB } from '../../core/getTestDB';
-import { agents, userConnectors, users, workspaces } from '../../schemas';
+import { agents, userConnectors, userConnectorTools, users, workspaces } from '../../schemas';
 import type { LobeChatDatabase } from '../../type';
 import { ConnectorModel } from '../connector';
 
@@ -244,6 +245,32 @@ describe('ConnectorModel agent-scoped resolution', () => {
       // source row is untouched
       const stillBase = await model.findScopedByIdentifier('gmail');
       expect(stillBase?.id).toBe(source.id);
+    });
+
+    it('clones the connector tools onto the copy, leaving the source tools intact', async () => {
+      const source = await insertConnector({ identifier: 'gmail', name: 'Personal Gmail' });
+      await serverDB.insert(userConnectorTools).values({
+        crudType: 'read',
+        permission: 'auto',
+        toolName: 'GMAIL_SEND_EMAIL',
+        userConnectorId: source.id,
+        userId,
+      });
+
+      const model = new ConnectorModel(serverDB, userId);
+      const copy = await model.copyToAgent(source.id, agentA);
+
+      const copiedTools = await serverDB
+        .select()
+        .from(userConnectorTools)
+        .where(eq(userConnectorTools.userConnectorId, copy!.id));
+      expect(copiedTools.map((t) => t.toolName)).toEqual(['GMAIL_SEND_EMAIL']);
+
+      const sourceTools = await serverDB
+        .select()
+        .from(userConnectorTools)
+        .where(eq(userConnectorTools.userConnectorId, source.id));
+      expect(sourceTools).toHaveLength(1);
     });
 
     it('drops a mount lock from the copied metadata', async () => {

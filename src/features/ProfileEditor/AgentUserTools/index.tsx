@@ -39,6 +39,7 @@ const AgentUserTools = memo<AgentToolProps>((props) => {
   }, [effectiveAgentId, isInit, fetchAgentConnectors]);
 
   const [copyMode, setCopyMode] = useState(false);
+  const [copying, setCopying] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
 
   const toggleSelected = (id: string) =>
@@ -55,22 +56,29 @@ const AgentUserTools = memo<AgentToolProps>((props) => {
   };
 
   const handleConfirmCopy = async () => {
-    const identifiers: string[] = [];
-    for (const id of selected) {
-      const conn = userConnectors.find((c) => c.id === id);
-      if (!conn) continue;
-      await copyConnectorToAgent(id, effectiveAgentId);
-      identifiers.push(conn.identifier);
+    setCopying(true);
+    try {
+      const identifiers: string[] = [];
+      for (const id of selected) {
+        const conn = userConnectors.find((c) => c.id === id);
+        if (!conn) continue;
+        await copyConnectorToAgent(id, effectiveAgentId);
+        identifiers.push(conn.identifier);
+      }
+      // Pin the copied tools for the agent so the runtime resolves them.
+      if (identifiers.length > 0) {
+        const config = agentSelectors.getAgentConfigById(effectiveAgentId)(
+          useAgentStore.getState(),
+        );
+        let plugins = config?.plugins;
+        for (const identifier of identifiers)
+          plugins = upsertPluginMode(plugins, identifier, 'pinned');
+        await updateAgentConfigById(effectiveAgentId, { plugins });
+      }
+      resetCopy();
+    } finally {
+      setCopying(false);
     }
-    // Pin the copied tools for the agent so the runtime resolves them.
-    if (identifiers.length > 0) {
-      const config = agentSelectors.getAgentConfigById(effectiveAgentId)(useAgentStore.getState());
-      let plugins = config?.plugins;
-      for (const identifier of identifiers)
-        plugins = upsertPluginMode(plugins, identifier, 'pinned');
-      await updateAgentConfigById(effectiveAgentId, { plugins });
-    }
-    resetCopy();
   };
 
   return (
@@ -95,6 +103,7 @@ const AgentUserTools = memo<AgentToolProps>((props) => {
         {...props}
         agentId={effectiveAgentId}
         copyMode={copyMode}
+        copying={copying}
         selected={selected}
         toggleSelected={toggleSelected}
         onCancelCopy={resetCopy}

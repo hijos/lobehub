@@ -16,6 +16,7 @@ import { connectorSelectors } from '@/store/tool/slices/connector';
 
 interface Props extends AgentToolProps {
   agentId: string;
+  copying: boolean;
   copyMode: boolean;
   onCancelCopy: () => void;
   onConfirmCopy: () => void;
@@ -29,7 +30,16 @@ interface Props extends AgentToolProps {
  * selectable chips so several can be copied into the agent at once.
  */
 const UserToolsSection = memo<Props>(
-  ({ agentId, copyMode, onCancelCopy, onConfirmCopy, selected, toggleSelected, ...toolProps }) => {
+  ({
+    agentId,
+    copyMode,
+    copying,
+    onCancelCopy,
+    onConfirmCopy,
+    selected,
+    toggleSelected,
+    ...toolProps
+  }) => {
     const { t } = useTranslation('setting');
     const userConnectors = useToolStore(connectorSelectors.connectorList, isEqual);
     const config = useAgentStore(agentSelectors.getAgentConfigById(agentId), isEqual);
@@ -46,11 +56,12 @@ const UserToolsSection = memo<Props>(
               {t('settingAgent.agentTools.copyPick')}
             </Text>
             <Flexbox horizontal gap={8}>
-              <Button size={'small'} type={'text'} onClick={onCancelCopy}>
+              <Button disabled={copying} size={'small'} type={'text'} onClick={onCancelCopy}>
                 {t('cancel', { ns: 'common' })}
               </Button>
               <Button
-                disabled={selected.size === 0}
+                disabled={selected.size === 0 || copying}
+                loading={copying}
                 size={'small'}
                 type={'primary'}
                 onClick={onConfirmCopy}

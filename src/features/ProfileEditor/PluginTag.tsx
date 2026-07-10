@@ -156,32 +156,14 @@ const PluginTag = memo<PluginTagProps>(
 
     // Try to find in local lists first (including Composio and LobehubSkill)
     const localMeta = useMemo(() => {
-      // Agent-owned/mounted connector: resolve as installed from the agent's own
-      // rows, since it won't appear in the user-scoped stores below.
-      if (agentId) {
-        const agentConn = agentConnectors.find((c) => c.identifier === identifier);
-        if (agentConn) {
-          const composioType = COMPOSIO_APP_TYPES.find((type) => type.identifier === identifier);
-          if (composioType) {
-            return {
-              availableInWeb: true,
-              icon: composioType.icon,
-              isInstalled: true,
-              label: composioType.label,
-              title: composioType.label,
-              type: 'composio' as const,
-            };
-          }
-          return {
-            availableInWeb: true,
-            icon: McpIcon,
-            isInstalled: true,
-            label: agentConn.name || identifier,
-            title: agentConn.name || identifier,
-            type: 'custom-connector' as const,
-          };
-        }
-      }
+      // Agent-owned/mounted connector: resolve as installed even though it isn't
+      // in the user-scoped stores. The icon still comes from the normal
+      // resolution below (composio/lobehub/builtin/plugin), with an MCP fallback
+      // at the end for an agent-only connector absent from every user list.
+      const agentConn = agentId
+        ? agentConnectors.find((c) => c.identifier === identifier)
+        : undefined;
+      const agentInstalled = !!agentConn;
 
       // Check if it's a Composio server type
       if (isComposioEnabledInEnv) {
@@ -192,7 +174,7 @@ const PluginTag = memo<PluginTagProps>(
           return {
             availableInWeb: true,
             icon: composioType.icon,
-            isInstalled: !!connectedServer,
+            isInstalled: !!connectedServer || agentInstalled,
             label: composioType.label,
             title: composioType.label,
             type: 'composio' as const,
@@ -209,7 +191,7 @@ const PluginTag = memo<PluginTagProps>(
           return {
             availableInWeb: true,
             icon: lobehubSkillProvider.icon,
-            isInstalled: !!connectedServer,
+            isInstalled: !!connectedServer || agentInstalled,
             label: lobehubSkillProvider.label,
             title: lobehubSkillProvider.label,
             type: 'lobehub-skill' as const,
@@ -254,6 +236,19 @@ const PluginTag = memo<PluginTagProps>(
           isInstalled: true,
           title: installedMeta.title,
           type: 'plugin' as const,
+        };
+      }
+
+      // Agent-only connector not found in any user store: use its own row + MCP
+      // icon so it renders installed (not a warning "Not Installed" chip).
+      if (agentConn) {
+        return {
+          availableInWeb: true,
+          icon: McpIcon,
+          isInstalled: true,
+          label: agentConn.name || identifier,
+          title: agentConn.name || identifier,
+          type: 'custom-connector' as const,
         };
       }
 

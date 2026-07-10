@@ -1,6 +1,5 @@
 'use client';
 
-import { COMPOSIO_APP_TYPES } from '@lobechat/const';
 import { Dropdown, Flexbox, Icon, Tag, Text } from '@lobehub/ui';
 import { Button, confirmModal, Modal } from '@lobehub/ui/base-ui';
 import { McpIcon } from '@lobehub/ui/icons';
@@ -9,17 +8,14 @@ import { CopyIcon, LinkIcon, PlugZapIcon, PlusIcon } from 'lucide-react';
 import { memo, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import ComposioServerItem from '@/features/ChatInput/ActionBar/Tools/ComposioServerItem';
-import ComposioSkillIcon, {
-  SKILL_ICON_SIZE,
-} from '@/features/ChatInput/ActionBar/Tools/ComposioSkillIcon';
+import { createAgentSkillStoreModal } from '@/features/AgentSkillStore';
+import { SKILL_ICON_SIZE } from '@/features/ChatInput/ActionBar/Tools/ComposioSkillIcon';
 import { usePermission } from '@/hooks/usePermission';
 import { useToolStore } from '@/store/tool';
-import { composioStoreSelectors } from '@/store/tool/selectors';
 import { connectorSelectors } from '@/store/tool/slices/connector';
 import type { ConnectorWithTools } from '@/store/tool/slices/connector/types';
 
-type PickerMode = 'connectNew' | 'copy' | 'mount';
+type PickerMode = 'copy' | 'mount';
 
 const badgeColor: Record<'agentOnly' | 'copy' | 'linked', string> = {
   agentOnly: 'default',
@@ -33,7 +29,6 @@ const AgentToolsTab = memo<{ agentId: string }>(({ agentId }) => {
 
   const agentConnectors = useToolStore(connectorSelectors.agentConnectors(agentId), isEqual);
   const userConnectors = useToolStore(connectorSelectors.connectorList, isEqual);
-  const composioServers = useToolStore(composioStoreSelectors.getServers, isEqual);
 
   // Badge derived locally (avoids a store selector that returns a fresh fn each render):
   // linked = mounted user row; copy = agent-owned w/ a same-named user tool; else agent-only.
@@ -82,7 +77,7 @@ const AgentToolsTab = memo<{ agentId: string }>(({ agentId }) => {
           </Text>
         </Flexbox>
       ),
-      onClick: () => setPicker('connectNew'),
+      onClick: () => createAgentSkillStoreModal(agentId),
     },
     {
       icon: <Icon icon={CopyIcon} />,
@@ -185,30 +180,6 @@ const AgentToolsTab = memo<{ agentId: string }>(({ agentId }) => {
                 {c.name || c.identifier}
               </Flexbox>
             </Button>
-          ))}
-        </Flexbox>
-      </Modal>
-
-      {/* Connect-new picker — composio app types, reusing the existing connect flow */}
-      <Modal
-        footer={null}
-        open={picker === 'connectNew'}
-        title={t('settingAgent.agentTools.connectNewPickerTitle')}
-        onCancel={() => setPicker(null)}
-      >
-        <Flexbox gap={4} style={{ maxHeight: 420, overflowY: 'auto' }}>
-          {COMPOSIO_APP_TYPES.map((type) => (
-            <Flexbox horizontal align={'center'} gap={8} key={type.identifier}>
-              <ComposioSkillIcon icon={type.icon} label={type.label} size={SKILL_ICON_SIZE} />
-              <ComposioServerItem
-                agentScoped
-                agentId={agentId}
-                appSlug={type.appSlug}
-                identifier={type.identifier}
-                label={type.label}
-                server={composioServers.find((s) => s.identifier === type.identifier)}
-              />
-            </Flexbox>
           ))}
         </Flexbox>
       </Modal>

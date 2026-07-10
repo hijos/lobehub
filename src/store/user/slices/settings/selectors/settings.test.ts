@@ -134,6 +134,53 @@ describe('settingsSelectors', () => {
     });
   });
 
+  describe('currentMemoryPreferredLanguage', () => {
+    it('uses memory.preferredLanguage when set', () => {
+      const s = {
+        defaultSettings: {},
+        settings: {
+          general: { responseLanguage: 'en-US' },
+          memory: { preferredLanguage: 'zh-CN' },
+        },
+      } as unknown as UserStore;
+
+      expect(settingsSelectors.currentMemoryPreferredLanguage(s)).toBe('zh-CN');
+    });
+
+    it('falls back to general.responseLanguage when memory preference is not set', () => {
+      const s = {
+        defaultSettings: {},
+        settings: {
+          general: { responseLanguage: 'ja-JP' },
+          memory: { effort: 'high' },
+        },
+      } as unknown as UserStore;
+
+      expect(settingsSelectors.currentMemoryPreferredLanguage(s)).toBe('ja-JP');
+    });
+
+    it('preserves auto when memory preference is auto', () => {
+      const s = {
+        defaultSettings: {},
+        settings: {
+          general: { responseLanguage: 'en-US' },
+          memory: { preferredLanguage: 'auto' },
+        },
+      } as unknown as UserStore;
+
+      expect(settingsSelectors.currentMemoryPreferredLanguage(s)).toBe('auto');
+    });
+
+    it('returns undefined when neither memory nor response language is set', () => {
+      const s = {
+        defaultSettings: {},
+        settings: { memory: { effort: 'medium' } },
+      } as unknown as UserStore;
+
+      expect(settingsSelectors.currentMemoryPreferredLanguage(s)).toBeUndefined();
+    });
+  });
+
   describe('getProviderConfigById', () => {
     it('should return the provider config for a given provider id', () => {
       const providerConfig = {

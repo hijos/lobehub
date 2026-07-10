@@ -61,7 +61,7 @@ export const registerClientWorkFromIntent = async ({
           targets.map((target) =>
             target.taskId
               ? workService.deleteTaskWork({ taskId: target.taskId }).catch((error) => {
-                  log('deleteTaskWork failed: %O', error);
+                  log('deleteTaskWork failed for task %s: %O', target.taskId, error);
                 })
               : undefined,
           ),
@@ -90,7 +90,12 @@ export const registerClientWorkFromIntent = async ({
               ...cumulative,
             })
             .catch((error) => {
-              log('registerTask failed: %O', error);
+              log(
+                'registerTask failed for task %s (%s): %O',
+                target.taskId,
+                target.taskIdentifier,
+                error,
+              );
               return undefined;
             }),
         ),

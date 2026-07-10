@@ -168,12 +168,16 @@ export const listSummariesByRootOperations = async (
     listGithubWorkSummaryRows(ctx, filters, rowLimit),
   ]);
   const summaries = latestSummaryItemsByWork(
-    [
-      ...(await toTaskWorkSummaries(ctx, taskRows)),
-      ...(await toDocumentWorkSummaries(ctx, documentRows)),
-      ...(await toLinearWorkSummaries(ctx, linearRows)),
-      ...(await toGithubWorkSummaries(ctx, githubRows)),
-    ].sort((a, b) => b.event.createdAt.getTime() - a.event.createdAt.getTime()),
+    (
+      await Promise.all([
+        toTaskWorkSummaries(ctx, taskRows),
+        toDocumentWorkSummaries(ctx, documentRows),
+        toLinearWorkSummaries(ctx, linearRows),
+        toGithubWorkSummaries(ctx, githubRows),
+      ])
+    )
+      .flat()
+      .sort((a, b) => b.event.createdAt.getTime() - a.event.createdAt.getTime()),
   );
 
   for (const summary of summaries) {

@@ -338,13 +338,13 @@ const WorksSection = memo<WorksSectionProps>(({ active = true }) => {
   // Summary rides the message payload — derive it in the selector so we only
   // re-render when the *works* shape changes, not on every streamed token
   // (which would thrash `isEqual` over the full `UIChatMessage[]`).
-  const summaryData = useChatStore((s) => {
-    const messages = dbMessageSelectors.activeDbMessages(s);
-    const scoped = threadId
-      ? messages.filter((m) => m.threadId === threadId)
-      : messages.filter((m) => !m.threadId);
-    return getAllWorkSummaries(scoped);
-  }, isEqual);
+  const summaryData = useChatStore(
+    // Pass the raw messages array (stable across unrelated store ticks) and let
+    // getAllWorkSummaries scope + memoize by threadId; filtering here would hand
+    // it a fresh array every call and defeat its identity-keyed cache.
+    (s) => getAllWorkSummaries(dbMessageSelectors.activeDbMessages(s), threadId),
+    isEqual,
+  );
 
   // Freshness policy for Work caches (sole owner — gateway transport keeps no
   // Work-cache knowledge):

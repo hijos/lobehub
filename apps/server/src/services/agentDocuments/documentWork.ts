@@ -43,7 +43,11 @@ export const createDocumentWorkRegistrar = (deps: {
       .findById(deps.workspaceId)
       .then((workspace) => workspace?.slug)
       .catch((error) => {
-        console.error(`${deps.logPrefix} Failed to resolve workspace slug:`, error);
+        console.error(
+          `${deps.logPrefix} Failed to resolve workspace slug:`,
+          { userId: deps.userId, workspaceId: deps.workspaceId },
+          error,
+        );
         return undefined;
       });
 

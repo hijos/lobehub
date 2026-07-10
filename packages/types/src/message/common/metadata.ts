@@ -454,7 +454,7 @@ export interface MessageMetadata {
   verifyRound?: number;
   /**
    * Final assistant message marker for Work artifacts produced during one root
-   * operation. Work ownership stays on `work_contexts.root_operation_id`; this
+   * operation. Work ownership stays on `work_versions.root_operation_id`; this
    * metadata only tells refreshed chat history where to render the cards.
    */
   work?: MessageWorkMetadata;

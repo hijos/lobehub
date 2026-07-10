@@ -87,4 +87,27 @@ describe('getAllWorkSummaries', () => {
   it('returns an empty array when no message carries works', () => {
     expect(getAllWorkSummaries([message({ id: 'm1' })])).toEqual([]);
   });
+
+  it('memoizes per (messages identity, threadId) so an unchanged snapshot is not rebuilt', () => {
+    const messages = [
+      message({ id: 'm1', works: [summary('work-1', 'op-a', '2026-07-01T00:00:00.000Z')] }),
+    ];
+
+    // Same reference + same thread scope in -> same resolved array out (built once).
+    expect(getAllWorkSummaries(messages)).toBe(getAllWorkSummaries(messages));
+    // A different thread scope over the same array is a distinct cache entry.
+    expect(getAllWorkSummaries(messages, 't1')).not.toBe(getAllWorkSummaries(messages));
+  });
+
+  it('scopes to the requested thread (main thread excludes threaded messages)', () => {
+    const mainWork = summary('work-main', 'op-a', '2026-07-01T00:00:00.000Z');
+    const threadWork = summary('work-thread', 'op-b', '2026-07-02T00:00:00.000Z');
+    const messages = [
+      message({ id: 'm1', works: [mainWork] }),
+      message({ id: 'm2', threadId: 't1', works: [threadWork] } as Partial<UIChatMessage>),
+    ];
+
+    expect(getAllWorkSummaries(messages).map((w) => w.id)).toEqual(['work-main']);
+    expect(getAllWorkSummaries(messages, 't1').map((w) => w.id)).toEqual(['work-thread']);
+  });
 });

@@ -19,26 +19,16 @@ import {
   listSnapshotVersionEventRows,
   listSnapshotWorkSummaryRows,
   type SnapshotWorkSummaryQueryRow,
+  truncateSummaryText,
 } from './internal';
 import { createVersion, findById, resolveWorkUpsertConflict } from './writes';
-
-const DOCUMENT_DESCRIPTION_PREFIX_LENGTH = 120;
-
-const getDocumentContentPrefix = (content: string | null) => {
-  const normalized = content?.replaceAll(/\s+/g, ' ').trim();
-  if (!normalized) return null;
-
-  return normalized.length > DOCUMENT_DESCRIPTION_PREFIX_LENGTH
-    ? `${normalized.slice(0, DOCUMENT_DESCRIPTION_PREFIX_LENGTH)}...`
-    : normalized;
-};
 
 export const documentSnapshot = (
   doc: DocumentItem,
   params: Pick<RegisterDocumentWorkParams, 'description' | 'url'>,
 ): WorkVersionSnapshot => {
   const description =
-    params.description?.trim() || doc.description?.trim() || getDocumentContentPrefix(doc.content);
+    params.description?.trim() || doc.description?.trim() || truncateSummaryText(doc.content);
 
   return {
     document: {

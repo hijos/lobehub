@@ -44,6 +44,19 @@ const GITHUB_WORK_TOOLS: Record<
 
 const GITHUB_CLI_TOOLS = new Set(['runCommand', 'run_command']);
 
+/**
+ * Builds a `patch` helper bound to a `patchFields` set: it records that a field
+ * is present in the partial snapshot and returns the value only when present
+ * (so absent fields stay `undefined` and don't overwrite the current snapshot).
+ * Shared by the structured-tool and gh-CLI param builders.
+ */
+const makePatch =
+  (patchFields: Set<GithubWorkPatchField>) =>
+  <T>(field: GithubWorkPatchField, present: boolean, value: T): T | undefined => {
+    if (present) patchFields.add(field);
+    return present ? value : undefined;
+  };
+
 interface GithubToolRegisterOperation {
   params: RegisterGithubWorkParams;
   type: 'register';
@@ -202,10 +215,7 @@ const buildParams = (
   const url = resolveUrl(record);
 
   const patchFields = new Set<GithubWorkPatchField>();
-  const patch = <T>(field: GithubWorkPatchField, present: boolean, value: T) => {
-    if (present) patchFields.add(field);
-    return present ? value : undefined;
-  };
+  const patch = makePatch(patchFields);
 
   if (repo) patchFields.add('repo');
   if (number !== null) patchFields.add('number');
@@ -624,10 +634,7 @@ const normalizeGithubCliResult = (
   const identifier = `${ref.repo}#${ref.number}`;
 
   const patchFields = new Set<GithubWorkPatchField>(['number', 'repo']);
-  const patch = <T>(field: GithubWorkPatchField, present: boolean, value: T) => {
-    if (present) patchFields.add(field);
-    return present ? value : undefined;
-  };
+  const patch = makePatch(patchFields);
 
   return {
     params: {

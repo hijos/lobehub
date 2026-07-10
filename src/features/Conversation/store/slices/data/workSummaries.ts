@@ -49,14 +49,21 @@ export const getWorkSummariesByRootOperationId = (
   rootOperationId ? (getWorkSummaryIndex(messages).get(rootOperationId) ?? []) : [];
 
 /**
- * Flatten every message's Work summaries into the conversation-wide list the
- * Works sidebar (summary mode) renders: one row per Work, deduped to its latest
- * event and sorted newest-first. Mirrors the server `latestSummaryItemsByWork`
- * shaping the removed `listSummariesByConversation` used to return.
+ * Flatten a thread's Work summaries into the conversation-wide list the Works
+ * sidebar (summary mode) renders: one row per Work, deduped to its latest event
+ * and sorted newest-first. Mirrors the server `latestSummaryItemsByWork` shaping
+ * the removed `listSummariesByConversation` used to return.
  */
-const buildAllWorkSummaries = (messages: UIChatMessage[]): WorkSummaryItem[] => {
+const buildAllWorkSummaries = (
+  messages: UIChatMessage[],
+  threadId?: string | null,
+): WorkSummaryItem[] => {
   const latestByWork = new Map<string, WorkSummaryItem>();
   for (const message of messages) {
+    // Scope to the active thread here rather than at the call site: filtering
+    // upstream would hand this function a fresh array on every call and defeat
+    // the identity-keyed memo below.
+    if (threadId ? message.threadId !== threadId : !!message.threadId) continue;
     for (const work of message.works ?? []) {
       const existing = latestByWork.get(work.id);
       if (!existing || toTime(work.event.createdAt) > toTime(existing.event.createdAt)) {
@@ -69,13 +76,28 @@ const buildAllWorkSummaries = (messages: UIChatMessage[]): WorkSummaryItem[] => 
   );
 };
 
-const allWorkSummariesCache = new WeakMap<UIChatMessage[], WorkSummaryItem[]>();
+// Memoize per (dbMessages array identity, threadId). Keying on the RAW messages
+// reference — stable across unrelated chat-store `set()`s — means a full rebuild
+// runs once per actual message snapshot, not on every streamed token / store
+// tick. A pre-filtered array would produce a new identity each call and never
+// hit this cache.
+const MAIN_THREAD_CACHE_KEY = '__main__';
+const allWorkSummariesCache = new WeakMap<UIChatMessage[], Map<string, WorkSummaryItem[]>>();
 
-export const getAllWorkSummaries = (messages: UIChatMessage[]): WorkSummaryItem[] => {
-  let list = allWorkSummariesCache.get(messages);
+export const getAllWorkSummaries = (
+  messages: UIChatMessage[],
+  threadId?: string | null,
+): WorkSummaryItem[] => {
+  const cacheKey = threadId ?? MAIN_THREAD_CACHE_KEY;
+  let byThread = allWorkSummariesCache.get(messages);
+  if (!byThread) {
+    byThread = new Map();
+    allWorkSummariesCache.set(messages, byThread);
+  }
+  let list = byThread.get(cacheKey);
   if (!list) {
-    list = buildAllWorkSummaries(messages);
-    allWorkSummariesCache.set(messages, list);
+    list = buildAllWorkSummaries(messages, threadId);
+    byThread.set(cacheKey, list);
   }
   return list;
 };

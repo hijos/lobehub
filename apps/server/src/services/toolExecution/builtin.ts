@@ -49,14 +49,10 @@ const collectRuntimeApiNames = (runtime: Record<string, any>): string[] => {
 };
 
 export class BuiltinToolsExecutor implements IToolExecutor {
-  private db: LobeChatDatabase;
-  private userId: string;
   private marketService: MarketService;
   private composioService: ComposioService;
 
   constructor(db: LobeChatDatabase, userId: string) {
-    this.db = db;
-    this.userId = userId;
     this.marketService = new MarketService({ userInfo: { userId } });
     this.composioService = new ComposioService({ db, userId });
   }
@@ -199,8 +195,24 @@ export class BuiltinToolsExecutor implements IToolExecutor {
       // runtime, which persists the Work version ONCE with its cumulative cost.
       // Falls back to the intent a runtime emitted via `onWorkRegistration`
       // (documents). No-op unless the API declares a `work` config or emits one.
-      const workRegistration =
-        resolveBuiltinToolWorkIntent(identifier, apiName, { args, result }) ?? collectedWorkIntent;
+      //
+      // Best-effort: Work-intent resolution is post-hoc bookkeeping over an
+      // already-successful tool call, so a bug in the resolver must not turn a
+      // succeeded mutation into a reported tool failure. Isolate it from the
+      // execution try/catch below and swallow-and-log instead.
+      let workRegistration: WorkRegistrationIntent | undefined;
+      try {
+        workRegistration =
+          resolveBuiltinToolWorkIntent(identifier, apiName, { args, result }) ??
+          collectedWorkIntent;
+      } catch (workError) {
+        log(
+          'Work registration intent resolution failed for %s:%s: %O',
+          identifier,
+          apiName,
+          workError,
+        );
+      }
 
       return workRegistration ? { ...result, workRegistration } : result;
     } catch (e) {

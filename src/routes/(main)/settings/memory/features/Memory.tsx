@@ -80,7 +80,7 @@ const MemorySetting = memo(() => {
                 allowClear
                 disabled={!canManageMemory}
                 placeholder={t('memory.preferredLanguage.placeholder')}
-                style={{ width: '50%' }}
+                style={{ maxWidth: '100%', minWidth: 220, width: 'min(260px, 100%)' }}
                 value={memory?.preferredLanguage || undefined}
                 options={[
                   { label: t('memory.preferredLanguage.auto'), value: 'auto' },

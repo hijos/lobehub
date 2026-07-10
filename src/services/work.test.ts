@@ -15,10 +15,89 @@ vi.mock('@/libs/trpc/client', () => ({
 }));
 
 // Imported after the mocks so the service binds to the stubbed `mutate`.
-const { workService } = await import('./work');
+const { didToolMutateWorkView, workService } = await import('./work');
 
 beforeEach(() => {
   mutate.mockClear();
+});
+
+describe('didToolMutateWorkView', () => {
+  it('detects a Work registration intent', () => {
+    expect(
+      didToolMutateWorkView({
+        apiName: 'createIssue',
+        identifier: 'linear',
+        succeeded: true,
+        workRegistration: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('detects task status mutations without a Work registration intent', () => {
+    expect(
+      didToolMutateWorkView({
+        apiName: 'updateTaskStatus',
+        identifier: 'lobe-task',
+        succeeded: true,
+        workRegistration: false,
+      }),
+    ).toBe(true);
+  });
+
+  it('detects a partially successful runTasks result', () => {
+    expect(
+      didToolMutateWorkView({
+        apiName: 'runTasks',
+        identifier: 'lobe-task',
+        result: { state: { succeeded: 1 } },
+        succeeded: false,
+        workRegistration: false,
+      }),
+    ).toBe(true);
+
+    expect(
+      didToolMutateWorkView({
+        apiName: 'runTasks',
+        identifier: 'lobe-task',
+        succeeded: false,
+        workRegistration: false,
+      }),
+    ).toBe(true);
+  });
+
+  it('ignores read-only and failed task calls', () => {
+    expect(
+      didToolMutateWorkView({
+        apiName: 'listTasks',
+        identifier: 'lobe-task',
+        succeeded: true,
+        workRegistration: false,
+      }),
+    ).toBe(false);
+    expect(
+      didToolMutateWorkView({
+        apiName: 'updateTaskStatus',
+        identifier: 'lobe-task',
+        succeeded: false,
+        workRegistration: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('workService.refreshConversation', () => {
+  it('refreshes messages, history, and mounted version timelines once per operation', async () => {
+    await workService.refreshConversation('t1', 'th1');
+
+    expect(mutate).toHaveBeenCalledTimes(3);
+    expect(mutate).toHaveBeenCalledWith(workKeys.conversation('t1', 'th1'));
+
+    const matchers = mutate.mock.calls
+      .map(([key]) => key)
+      .filter((key): key is (cacheKey: unknown) => boolean => typeof key === 'function');
+    expect(matchers.some((matcher) => matcher(['message:list', { topicId: 't1' }, 1]))).toBe(true);
+    expect(matchers.some((matcher) => matcher(workKeys.versions('w1')))).toBe(true);
+  });
 });
 
 describe('workService.refreshConversationViews', () => {

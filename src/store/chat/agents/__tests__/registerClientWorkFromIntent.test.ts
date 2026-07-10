@@ -5,7 +5,6 @@ const mocks = vi.hoisted(() => ({
   deleteTaskWork: vi.fn(),
   handleSkillToolResult: vi.fn(),
   refreshConversation: vi.fn(),
-  refreshVersions: vi.fn(),
   registerDocument: vi.fn(),
   registerTask: vi.fn(),
 }));
@@ -15,7 +14,6 @@ vi.mock('@/services/work', () => ({
     deleteTaskWork: mocks.deleteTaskWork,
     handleSkillToolResult: mocks.handleSkillToolResult,
     refreshConversation: mocks.refreshConversation,
-    refreshVersions: mocks.refreshVersions,
     registerDocument: mocks.registerDocument,
     registerTask: mocks.registerTask,
   },
@@ -56,11 +54,10 @@ describe('registerClientWorkFromIntent', () => {
     mocks.deleteTaskWork.mockResolvedValue(undefined);
     mocks.handleSkillToolResult.mockResolvedValue({ id: 'skill-work-1' });
     mocks.refreshConversation.mockResolvedValue(undefined);
-    mocks.refreshVersions.mockResolvedValue(undefined);
   });
 
   describe('task', () => {
-    it('registers each created target with the cumulative cost and refreshes version lists only', async () => {
+    it('registers each created target with the cumulative cost without refreshing per tool', async () => {
       await registerClientWorkFromIntent({
         ...base,
         intent: {
@@ -89,9 +86,8 @@ describe('registerClientWorkFromIntent', () => {
           topicId: 'topic-1',
         }),
       );
-      // Message list settles once per operation (WorksSection) — no per-tool flood.
+      // The runtime settles Work caches once at operation end — no per-tool flood.
       expect(mocks.refreshConversation).not.toHaveBeenCalled();
-      expect(mocks.refreshVersions).toHaveBeenCalledWith('work-1');
     });
 
     it('deletes the task work per target without refreshing the message list', async () => {
@@ -103,7 +99,6 @@ describe('registerClientWorkFromIntent', () => {
       expect(mocks.deleteTaskWork).toHaveBeenCalledWith({ taskId: 'task_1' });
       expect(mocks.registerTask).not.toHaveBeenCalled();
       expect(mocks.refreshConversation).not.toHaveBeenCalled();
-      expect(mocks.refreshVersions).not.toHaveBeenCalled();
     });
 
     it('is a no-op for a create/update intent without a role', async () => {
@@ -135,7 +130,7 @@ describe('registerClientWorkFromIntent', () => {
   });
 
   describe('document', () => {
-    it('registers a document with the cumulative cost and refreshes caches', async () => {
+    it('registers a document with the cumulative cost without refreshing per tool', async () => {
       await registerClientWorkFromIntent({
         ...base,
         sourceToolName: 'createDocument',
@@ -163,7 +158,7 @@ describe('registerClientWorkFromIntent', () => {
           url: 'https://example.com/doc_1',
         }),
       );
-      expect(mocks.refreshVersions).toHaveBeenCalledWith('doc-work-1');
+      expect(mocks.refreshConversation).not.toHaveBeenCalled();
     });
 
     it('is a no-op for a document delete intent (deletes stay lambda-side)', async () => {

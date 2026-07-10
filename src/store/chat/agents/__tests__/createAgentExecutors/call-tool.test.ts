@@ -77,7 +77,7 @@ describe('call_tool executor', () => {
     it('should register the stashed work intent with the accumulated cost after execution', async () => {
       vi.mocked(registerClientWorkFromIntent).mockClear();
 
-      const mockStore = createMockStore();
+      const mockStore = createMockStore({ registerAfterCompletionCallback: vi.fn() });
       const context = createTestContext({ operationId: 'root-op-1' });
 
       const assistantMessage = createAssistantMessage({ groupId: 'group_123' });
@@ -136,12 +136,16 @@ describe('call_tool executor', () => {
           }),
         }),
       );
+      expect(mockStore.registerAfterCompletionCallback).toHaveBeenCalledWith(
+        'root-op-1',
+        expect.any(Function),
+      );
     });
 
     it('should not register work when no intent was stashed for the tool call', async () => {
       vi.mocked(registerClientWorkFromIntent).mockClear();
 
-      const mockStore = createMockStore();
+      const mockStore = createMockStore({ registerAfterCompletionCallback: vi.fn() });
       const context = createTestContext({ operationId: 'root-op-1' });
 
       const assistantMessage = createAssistantMessage({ groupId: 'group_123' });
@@ -167,15 +171,20 @@ describe('call_tool executor', () => {
       });
 
       expect(registerClientWorkFromIntent).not.toHaveBeenCalled();
+      expect(mockStore.registerAfterCompletionCallback).not.toHaveBeenCalled();
     });
 
-    it('should not block the tool step on the work registration', async () => {
-      // Registration is best-effort bookkeeping fired without awaiting; a slow
-      // (here: never-resolving) call must not delay the executor.
+    it('should await work registration before completing the tool step', async () => {
       vi.mocked(registerClientWorkFromIntent).mockClear();
-      vi.mocked(registerClientWorkFromIntent).mockImplementationOnce(() => new Promise(() => {}));
+      let resolveRegistration!: () => void;
+      vi.mocked(registerClientWorkFromIntent).mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveRegistration = resolve;
+          }),
+      );
 
-      const mockStore = createMockStore();
+      const mockStore = createMockStore({ registerAfterCompletionCallback: vi.fn() });
       const context = createTestContext({ operationId: 'root-op-1' });
 
       const assistantMessage = createAssistantMessage({ groupId: 'group_123' });
@@ -199,17 +208,67 @@ describe('call_tool executor', () => {
       const instruction = createCallToolInstruction(toolCall, { parentMessageId: 'msg_parent' });
       const state = createInitialState({ operationId: 'root-op-1' });
 
-      const result = await executeWithMockContext({
+      let settled = false;
+      const execution = executeWithMockContext({
         executor: 'call_tool',
         instruction,
         state,
         mockStore,
         context,
+      }).finally(() => {
+        settled = true;
       });
 
+      await vi.waitFor(() => {
+        expect(registerClientWorkFromIntent).toHaveBeenCalledWith(
+          expect.objectContaining({ sourceToolCallId: 'tool_call_blocking' }),
+        );
+      });
+      expect(settled).toBe(false);
+
+      resolveRegistration();
+      const result = await execution;
       expect(result.events).toHaveLength(1);
-      expect(registerClientWorkFromIntent).toHaveBeenCalledWith(
-        expect.objectContaining({ sourceToolCallId: 'tool_call_blocking' }),
+      expect(settled).toBe(true);
+    });
+
+    it('should schedule one operation-end refresh for a task status mutation', async () => {
+      vi.mocked(registerClientWorkFromIntent).mockClear();
+
+      const mockStore = createMockStore({ registerAfterCompletionCallback: vi.fn() });
+      const context = createTestContext({ operationId: 'root-op-1' });
+      mockStore.dbMessagesMap[context.messageKey] = [
+        createAssistantMessage({ groupId: 'group_123' }),
+      ];
+      mockStore.internal_invokeDifferentTypePlugin = vi.fn().mockResolvedValue({
+        content: 'Task T-1 status updated to completed.',
+        state: { status: 'completed', success: true },
+        success: true,
+      });
+
+      const instruction = createCallToolInstruction(
+        {
+          apiName: 'updateTaskStatus',
+          arguments: JSON.stringify({ identifier: 'T-1', status: 'completed' }),
+          id: 'tool_call_status',
+          identifier: 'lobe-task',
+          type: 'default',
+        },
+        { parentMessageId: 'msg_parent' },
+      );
+
+      await executeWithMockContext({
+        executor: 'call_tool',
+        instruction,
+        state: createInitialState({ operationId: 'root-op-1' }),
+        mockStore,
+        context,
+      });
+
+      expect(registerClientWorkFromIntent).not.toHaveBeenCalled();
+      expect(mockStore.registerAfterCompletionCallback).toHaveBeenCalledWith(
+        'root-op-1',
+        expect.any(Function),
       );
     });
 

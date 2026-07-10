@@ -32,9 +32,8 @@ interface RegisterClientWorkFromIntentParams {
  * once here, after `UsageCounter.accumulateTool` has computed the cost.
  *
  * Best-effort: any failure is swallowed so Work bookkeeping never breaks the
- * tool result. Fired without awaiting from `call_tool` so the agent's next step
- * doesn't wait on the register round-trip. Does not revalidate `message:list`
- * per tool — message-backed chips settle once per operation (WorksSection).
+ * tool result. `call_tool` awaits the write so its operation-end refresh cannot
+ * race ahead of the persisted Work. No SWR cache is refreshed per tool.
  * Document deletes are NOT handled here — they stay a server-side side-effect
  * of the removeDocument tool mutation (a deletion carries no cost, so it needs
  * no cost-stamping defer).
@@ -66,14 +65,14 @@ export const registerClientWorkFromIntent = async ({
               : undefined,
           ),
         );
-        // Message-backed chips settle once per operation (WorksSection); avoid
-        // a full `message:list` revalidate on every tool.
+        // Message-backed chips settle once per operation; avoid a full
+        // `message:list` revalidate on every tool.
         return;
       }
 
       if (!role) return;
 
-      const works = await Promise.all(
+      await Promise.all(
         targets.map((target) =>
           workService
             .registerTask({
@@ -101,11 +100,6 @@ export const registerClientWorkFromIntent = async ({
         ),
       );
 
-      // Expanded version timelines only — conversation message list + sidebar
-      // history refresh once at operation end (WorksSection), not per tool.
-      await Promise.all(
-        works.filter(Boolean).map((work) => workService.refreshVersions(work?.id)),
-      ).catch((error) => log('refresh work version caches failed: %O', error));
       return;
     }
 
@@ -114,7 +108,7 @@ export const registerClientWorkFromIntent = async ({
       // lambda-side side-effect of the removeDocument mutation.
       if (intent.action !== 'register') return;
 
-      const work = await workService.registerDocument({
+      await workService.registerDocument({
         ...intent.document,
         ...cumulative,
         actorAgentId,
@@ -125,14 +119,11 @@ export const registerClientWorkFromIntent = async ({
         topicId,
       });
 
-      await workService
-        .refreshVersions(work?.id)
-        .catch((error) => log('refresh work version caches failed: %O', error));
       return;
     }
 
     // skill (linear / github): normalize the untruncated payload into a Work.
-    // `handleSkillToolResult` refreshes the shared caches internally.
+    // Cache refresh is operation-scoped in `call_tool`.
     await workService.handleSkillToolResult({
       actorAgentId,
       args: intent.args,

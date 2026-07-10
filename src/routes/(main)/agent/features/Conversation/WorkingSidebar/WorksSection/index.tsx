@@ -346,14 +346,13 @@ const WorksSection = memo<WorksSectionProps>(({ active = true }) => {
     isEqual,
   );
 
-  // Freshness policy for Work caches (sole owner — gateway transport keeps no
-  // Work-cache knowledge):
+  // Runtime transports own their operation-end Work refresh. This watcher only
+  // covers Work changes made outside an agent run (for example, a manual delete):
   //
   // 1. While a run is active, suppress refresh. Client registration no longer
   //    revalidates `message:list` per tool; gateway already pulls messages on
   //    tool_end (works may lag one beat until register commits).
-  // 2. When `isRunning` flips false, revalidate message list + sidebar lazy
-  //    views once for the whole round (chips + history + expanded versions).
+  // 2. When `isRunning` flips false, sync the snapshot without another refresh.
   // 3. Outside a run, if summary content changes (e.g. document delete), only
   //    the lazy history/version keys need a touch.
   const wasRunningRef = useRef(false);
@@ -367,7 +366,6 @@ const WorksSection = memo<WorksSectionProps>(({ active = true }) => {
     if (wasRunningRef.current) {
       wasRunningRef.current = false;
       prevSummaryRef.current = summaryData;
-      void workService.refreshConversation(topicId, threadId);
       return;
     }
 

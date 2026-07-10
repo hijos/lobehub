@@ -1,3 +1,4 @@
+import { TaskApiName, TaskIdentifier } from '@lobechat/builtin-tool-task';
 import type {
   RegisterDocumentWorkParams,
   RegisterSkillToolResultWorkParams,
@@ -20,6 +21,38 @@ export interface WorkSummaryPage {
   items: WorkSummaryItem[];
   nextCursor: string | null;
 }
+
+const TASK_WORK_VIEW_MUTATIONS = new Set<string>([
+  TaskApiName.runTask,
+  TaskApiName.runTasks,
+  TaskApiName.updateTaskStatus,
+]);
+
+export const didToolMutateWorkView = ({
+  apiName,
+  identifier,
+  result,
+  succeeded,
+  workRegistration,
+}: {
+  apiName?: string;
+  identifier?: string;
+  result?: { state?: unknown };
+  succeeded: boolean;
+  workRegistration: boolean;
+}): boolean => {
+  if (workRegistration) return true;
+  if (identifier !== TaskIdentifier || !apiName || !TASK_WORK_VIEW_MUTATIONS.has(apiName)) {
+    return false;
+  }
+
+  if (apiName === TaskApiName.runTasks) {
+    const succeededCount = (result?.state as { succeeded?: unknown } | undefined)?.succeeded;
+    return typeof succeededCount === 'number' ? succeededCount > 0 : true;
+  }
+
+  return succeeded;
+};
 
 class WorkService {
   listByConversation = async (params: {
@@ -58,28 +91,19 @@ class WorkService {
 
   handleSkillToolResult = async (
     params: RegisterSkillToolResultWorkParams,
-  ): Promise<WorkItem | null> => {
-    const work = await lambdaClient.work.handleSkillToolResult.mutate(params);
-    // Do not revalidate `message:list` here — per-tool full-list refresh floods
-    // the network during multi-tool rounds. Message-backed chips + sidebar
-    // summary settle once per operation (see WorksSection). Only expanded
-    // version timelines need a targeted refresh.
-    await this.refreshVersions(work?.id);
-
-    return work;
-  };
+  ): Promise<WorkItem | null> => lambdaClient.work.handleSkillToolResult.mutate(params);
 
   /**
    * Invalidate everything a Work mutation can change for a conversation:
    * - the topic's `message:list` entries, since Work summaries (in-message chips
    *   and the sidebar summary view) ride the message payload
-   * - the sidebar history view (`workKeys.conversation`), a separate lazy cache
+   * - the sidebar history and expanded version views
    */
   refreshConversation = async (topicId?: string | null, threadId?: string | null) => {
     if (!topicId) return;
     await Promise.all([
       this.refreshConversationMessages(topicId),
-      mutate(workKeys.conversation(topicId, threadId ?? null)),
+      this.refreshConversationViews(topicId, threadId),
     ]);
   };
 
@@ -104,10 +128,13 @@ class WorkService {
    * summaries ride the message list and are refreshed by the message fetch
    * itself) nor the cross-topic workspace gallery (`work:workspace`).
    *
-   * Called once per agent run at operation end (see WorksSection) instead of on
-   * every tool_end: these lazy views are an operation-grained concern, so a
-   * single settle-time refresh replaces the per-tool `work.listByConversation`
-   * flood. `mutate` only revalidates mounted keys, so this is a no-op when the
+   * Called once per agent run at operation end by the runtime transports
+   * (gateway: `agent_runtime_end`; client runtime: the afterCompletion callback
+   * via {@link refreshConversation}) instead of on every tool_end — these lazy
+   * views are an operation-grained concern, so a single settle-time refresh
+   * replaces the per-tool `work.listByConversation` flood. WorksSection only
+   * calls it for Work changes made outside a run (e.g. a manual delete).
+   * `mutate` only revalidates mounted keys, so this is a no-op when the
    * sidebar is collapsed or showing the summary view.
    */
   refreshConversationViews = async (topicId?: string | null, threadId?: string | null) => {

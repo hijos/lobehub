@@ -39,6 +39,7 @@ import { aiAgentService } from '@/services/aiAgent';
 import { chatService } from '@/services/chat';
 import { type ResolvedAgentConfig } from '@/services/chat/mecha';
 import { messageService } from '@/services/message';
+import { didToolMutateWorkView, workService } from '@/services/work';
 import { type ChatStore } from '@/store/chat/store';
 import { getCompressionCandidateMessageIds } from '@/store/chat/utils/compression';
 import { getFileStoreState } from '@/store/file/store';
@@ -169,6 +170,7 @@ export const createAgentExecutors = (context: {
   userMessageId?: string;
 }) => {
   let shouldSkipCreateMessage = context.skipCreateFirstMessage;
+  let workRefreshScheduled = false;
 
   const hasToolCallingOperation = () => {
     const operations = context.get().operations;
@@ -203,6 +205,18 @@ export const createAgentExecutors = (context: {
       throw new Error(`Operation not found: ${context.operationId}`);
     }
     return operation.context;
+  };
+
+  const scheduleWorkRefresh = () => {
+    if (workRefreshScheduled) return;
+    workRefreshScheduled = true;
+
+    const { threadId, topicId } = getOperationContext();
+    context
+      .get()
+      .registerAfterCompletionCallback(context.operationId, () =>
+        workService.refreshConversation(topicId, threadId),
+      );
   };
 
   /**
@@ -1041,12 +1055,9 @@ export const createAgentExecutors = (context: {
         if (cost) newState.cost = cost;
 
         // Write the Work version ONCE now that the tool call's cumulative cost is
-        // known — write-once instead of register-cost-less-then-backfill. Fire
-        // without awaiting so the agent's next step doesn't pay the register round
-        // trip + SWR revalidation. (`workIntent` was drained right after the tool
-        // returned, above.)
+        // known. Await the write so the operation-end cache refresh cannot race it.
         if (workIntent) {
-          void registerClientWorkFromIntent({
+          await registerClientWorkFromIntent({
             actorAgentId: opContext.agentId,
             intent: workIntent,
             rootOperationId: context.operationId,
@@ -1057,6 +1068,18 @@ export const createAgentExecutors = (context: {
             threadId: opContext.threadId,
             topicId: opContext.topicId ?? undefined,
           });
+        }
+
+        if (
+          didToolMutateWorkView({
+            apiName: chatToolPayload.apiName,
+            identifier: chatToolPayload.identifier,
+            result,
+            succeeded: isSuccess,
+            workRegistration: Boolean(workIntent),
+          })
+        ) {
+          scheduleWorkRefresh();
         }
 
         // Find current tool statistics

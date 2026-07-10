@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, or } from 'drizzle-orm';
+import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 
 import type {
   ConnectorCredentials,
@@ -52,35 +52,49 @@ export class ConnectorModel {
   private baseScope = () => and(this.ownership(), isNull(userConnectors.agentId));
 
   /**
-   * Candidate rows for agent-aware resolution within the current scope: base
-   * rows (`agent_id IS NULL`) plus, when an agent is given, that agent's own
-   * rows (`agent_id = agentId`). Other agents' rows are excluded.
+   * Candidate rows for agent-aware resolution within the current scope. For an
+   * agent this is:
+   * - agent-OWNED rows (`agent_id = agentId`) — the Copy / Connect-new flows;
+   * - base rows (`agent_id IS NULL`) that are either MOUNTED by this agent
+   *   (`metadata.mountedByAgentId = agentId`, the Linked flow) or free (not
+   *   mounted by anyone).
+   * A base row mounted (locked) by *another* agent is excluded, so a mounted
+   * connector can serve only its one agent. Without an agent, only free base
+   * rows are candidates.
    */
-  private scopePredicate = (agentId?: string) =>
-    and(
+  private scopePredicate = (agentId?: string) => {
+    const mountedBy = sql`${userConnectors.metadata} ->> 'mountedByAgentId'`;
+    if (!agentId) {
+      return and(this.ownership(), isNull(userConnectors.agentId), sql`${mountedBy} IS NULL`);
+    }
+    return and(
       this.ownership(),
-      agentId
-        ? or(eq(userConnectors.agentId, agentId), isNull(userConnectors.agentId))
-        : isNull(userConnectors.agentId),
+      or(
+        eq(userConnectors.agentId, agentId),
+        and(
+          isNull(userConnectors.agentId),
+          or(sql`${mountedBy} = ${agentId}`, sql`${mountedBy} IS NULL`),
+        ),
+      ),
     );
+  };
 
   /**
-   * Reduce candidate rows to at most one per identifier, preferring the
-   * agent-refined row over the base row (Agent > current scope). Resolution
-   * never crosses the current base scope: a workspace run resolves within the
+   * Reduce candidate rows to at most one per identifier by priority within the
+   * current scope: agent-OWNED (2) > MOUNTED by this agent (1) > free base (0).
+   * Resolution never crosses the base scope: a workspace run resolves within the
    * workspace, a personal run within personal — no cross-scope personal fallback.
    */
   private pickByPriority = (rows: UserConnectorItem[], agentId?: string): UserConnectorItem[] => {
+    const rank = (row: UserConnectorItem): number => {
+      if (agentId && row.agentId === agentId) return 2;
+      if (agentId && row.metadata?.mountedByAgentId === agentId) return 1;
+      return 0;
+    };
     const byIdentifier = new Map<string, UserConnectorItem>();
     for (const row of rows) {
       const current = byIdentifier.get(row.identifier);
-      if (!current) {
-        byIdentifier.set(row.identifier, row);
-        continue;
-      }
-      // An agent-owned row wins over the base row for the same identifier.
-      const rowIsAgent = !!agentId && row.agentId === agentId;
-      if (rowIsAgent) byIdentifier.set(row.identifier, row);
+      if (!current || rank(row) > rank(current)) byIdentifier.set(row.identifier, row);
     }
     return [...byIdentifier.values()];
   };
@@ -106,6 +120,38 @@ export class ConnectorModel {
     return result;
   };
 
+  /**
+   * Clone an existing connector into an agent scope ("Copy user tool"): a new
+   * independent row with the same config, bound to `agentId`. The encrypted
+   * `credentials` ciphertext is copied verbatim (same vault key, so no
+   * decrypt/re-encrypt needed) — which is why copying must happen server-side:
+   * the client never receives the ciphertext. Any mount reference on the source
+   * is dropped so the copy is a standalone agent-owned connector.
+   */
+  copyToAgent = async (sourceId: string, agentId: string): Promise<UserConnectorItem | null> => {
+    const [source] = await this.db
+      .select()
+      .from(userConnectors)
+      .where(and(eq(userConnectors.id, sourceId), this.ownership()))
+      .limit(1);
+    if (!source) return null;
+
+    const { id: _id, createdAt: _c, updatedAt: _u, metadata, ...rest } = source;
+    const cleanedMetadata = metadata
+      ? (() => {
+          const { mountedByAgentId: _m, ...restMeta } = metadata;
+          return restMeta;
+        })()
+      : metadata;
+
+    const [created] = await this.db
+      .insert(userConnectors)
+      .values({ ...rest, agentId, metadata: cleanedMetadata })
+      .returning();
+
+    return created;
+  };
+
   delete = async (id: string): Promise<void> => {
     await this.db.delete(userConnectors).where(and(eq(userConnectors.id, id), this.ownership()));
   };
@@ -119,9 +165,11 @@ export class ConnectorModel {
   };
 
   /**
-   * All connectors bound to a specific agent within the current scope. Powers
-   * the agent-settings management view (the base {@link query} deliberately
-   * excludes agent rows). Ordered by creation is left to the caller.
+   * All connectors that belong to an agent's "Agent Tools" view: agent-OWNED
+   * rows (`agent_id = agentId` — Copy / Connect-new) plus base rows MOUNTED by
+   * this agent (`metadata.mountedByAgentId = agentId` — Linked). Powers the
+   * agent-settings management view (the base {@link query} excludes agent-owned
+   * rows; mounted rows still appear there too, flagged as locked).
    */
   queryByAgent = async (
     agentId: string,
@@ -130,7 +178,15 @@ export class ConnectorModel {
     const rows = await this.db
       .select()
       .from(userConnectors)
-      .where(and(this.ownership(), eq(userConnectors.agentId, agentId)));
+      .where(
+        and(
+          this.ownership(),
+          or(
+            eq(userConnectors.agentId, agentId),
+            sql`${userConnectors.metadata} ->> 'mountedByAgentId' = ${agentId}`,
+          ),
+        ),
+      );
 
     return Promise.all(rows.map((r) => decryptRow(r, gateKeeper)));
   };

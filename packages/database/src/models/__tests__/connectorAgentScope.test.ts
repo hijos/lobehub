@@ -13,10 +13,12 @@ const workspaceId = 'agentscope-workspace';
 const agentA = 'agentscope-agent-a';
 const agentB = 'agentscope-agent-b';
 
-/** Insert a connector row directly so we can control (agentId, workspaceId) exactly. */
+/** Insert a connector row directly so we can control (agentId, workspaceId, metadata) exactly. */
 const insertConnector = async (row: {
   agentId?: string | null;
+  credentials?: string | null;
   identifier: string;
+  metadata?: Record<string, unknown> | null;
   name: string;
   userId?: string;
   workspaceId?: string | null;
@@ -25,7 +27,9 @@ const insertConnector = async (row: {
     .insert(userConnectors)
     .values({
       agentId: row.agentId ?? null,
+      credentials: row.credentials ?? null,
       identifier: row.identifier,
+      metadata: row.metadata ?? null,
       name: row.name,
       sourceType: 'custom',
       status: 'connected',
@@ -218,6 +222,101 @@ describe('ConnectorModel agent-scoped resolution', () => {
       const byId = await model.queryByIdentifiers(['gmail']);
       expect(byId).toHaveLength(1);
       expect(byId[0].agentId).toBeNull();
+    });
+  });
+
+  describe('copyToAgent', () => {
+    it('clones a user connector into an agent-owned row, copying the credentials ciphertext verbatim and leaving the source intact', async () => {
+      const source = await insertConnector({
+        credentials: 'enc:cipher-blob',
+        identifier: 'gmail',
+        name: 'Personal Gmail',
+      });
+
+      const model = new ConnectorModel(serverDB, userId);
+      const copy = await model.copyToAgent(source.id, agentA);
+
+      expect(copy).not.toBeNull();
+      expect(copy!.id).not.toBe(source.id);
+      expect(copy!.agentId).toBe(agentA);
+      expect(copy!.identifier).toBe('gmail');
+      expect(copy!.credentials).toBe('enc:cipher-blob'); // ciphertext copied as-is
+      // source row is untouched
+      const stillBase = await model.findScopedByIdentifier('gmail');
+      expect(stillBase?.id).toBe(source.id);
+    });
+
+    it('drops a mount lock from the copied metadata', async () => {
+      const source = await insertConnector({
+        identifier: 'gmail',
+        metadata: { avatar: '📧', mountedByAgentId: agentB },
+        name: 'Personal Gmail',
+      });
+
+      const model = new ConnectorModel(serverDB, userId);
+      const copy = await model.copyToAgent(source.id, agentA);
+
+      expect(copy!.metadata?.mountedByAgentId).toBeUndefined();
+      expect(copy!.metadata?.avatar).toBe('📧');
+    });
+  });
+
+  describe('mount (reference + lock)', () => {
+    it('a base row mounted by an agent resolves for that agent but is locked away from others', async () => {
+      const mounted = await insertConnector({
+        identifier: 'gmail',
+        metadata: { mountedByAgentId: agentA },
+        name: 'Personal Gmail',
+      });
+
+      const model = new ConnectorModel(serverDB, userId);
+
+      // Agent A (the mounter) resolves it.
+      expect((await model.resolveByIdentifiers(['gmail'], agentA))[0]?.id).toBe(mounted.id);
+      // Agent B is locked out — the only row is mounted by A, no free fallback.
+      expect(await model.resolveByIdentifiers(['gmail'], agentB)).toHaveLength(0);
+      // Non-agent base resolution also excludes a mounted row.
+      expect(await model.resolveByIdentifiers(['gmail'])).toHaveLength(0);
+    });
+
+    it('prefers an agent-owned row over a mount, and a mount over a free base row', async () => {
+      await insertConnector({ identifier: 'gmail', name: 'Free base' });
+      await insertConnector({
+        identifier: 'notion',
+        metadata: { mountedByAgentId: agentA },
+        name: 'Mounted Notion',
+      });
+      const owned = await insertConnector({
+        agentId: agentA,
+        identifier: 'gmail',
+        name: 'Agent-owned Gmail',
+      });
+
+      const model = new ConnectorModel(serverDB, userId);
+      const resolved = await model.resolveByIdentifiers(['gmail', 'notion'], agentA);
+      const byIdentifier = Object.fromEntries(resolved.map((r) => [r.identifier, r]));
+
+      expect(byIdentifier.gmail.id).toBe(owned.id); // owned > free base
+      expect(byIdentifier.notion.name).toBe('Mounted Notion'); // mount resolves
+    });
+
+    it('queryByAgent returns agent-owned AND mounted rows', async () => {
+      const owned = await insertConnector({
+        agentId: agentA,
+        identifier: 'gmail',
+        name: 'Owned',
+      });
+      const mounted = await insertConnector({
+        identifier: 'notion',
+        metadata: { mountedByAgentId: agentA },
+        name: 'Mounted',
+      });
+      await insertConnector({ identifier: 'slack', name: 'Free base' }); // excluded
+
+      const model = new ConnectorModel(serverDB, userId);
+      const rows = await model.queryByAgent(agentA);
+
+      expect(rows.map((r) => r.id).sort()).toEqual([owned.id, mounted.id].sort());
     });
   });
 });

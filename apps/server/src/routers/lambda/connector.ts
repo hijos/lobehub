@@ -305,6 +305,97 @@ export const connectorRouter = router({
     }),
 
   /**
+   * "Copy user tool": clone a user connector into an independent agent-owned
+   * row (own credentials, separately editable). Server-side because the
+   * credentials ciphertext never reaches the client (see ConnectorModel).
+   */
+  copyToAgent: connectorProcedure
+    .input(z.object({ agentId: z.string(), connectorId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      const agentModel = new AgentModel(ctx.serverDB, ctx.userId, ctx.workspaceId ?? undefined);
+      if (!(await agentModel.existsById(input.agentId))) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Agent not found or not editable' });
+      }
+
+      const source = await ctx.connectorModel.findById(input.connectorId);
+      if (!source) throw new TRPCError({ code: 'NOT_FOUND', message: 'Connector not found' });
+
+      const existing = await ctx.connectorModel.findScopedByIdentifier(
+        source.identifier,
+        input.agentId,
+      );
+      if (existing) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: `Agent already has a "${source.identifier}" connector`,
+        });
+      }
+
+      const created = await ctx.connectorModel.copyToAgent(input.connectorId, input.agentId);
+      if (!created) throw new TRPCError({ code: 'NOT_FOUND', message: 'Connector not found' });
+      return { id: created.id };
+    }),
+
+  /**
+   * "Mount user tool" (Linked): reference-lock a user connector onto this agent.
+   * The row stays user-owned (keeps syncing with the user's edits) but resolves
+   * for this agent and is locked so no other agent can mount the same one.
+   */
+  mountToAgent: connectorProcedure
+    .input(z.object({ agentId: z.string(), connectorId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      const agentModel = new AgentModel(ctx.serverDB, ctx.userId, ctx.workspaceId ?? undefined);
+      if (!(await agentModel.existsById(input.agentId))) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Agent not found or not editable' });
+      }
+
+      const connector = await ctx.connectorModel.findById(input.connectorId);
+      if (!connector) throw new TRPCError({ code: 'NOT_FOUND', message: 'Connector not found' });
+      if (connector.agentId) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Only a user connector can be mounted (this one is already agent-owned)',
+        });
+      }
+
+      const lockedBy = connector.metadata?.mountedByAgentId;
+      if (lockedBy && lockedBy !== input.agentId) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'Connector is already mounted by another agent',
+        });
+      }
+
+      const existing = await ctx.connectorModel.findScopedByIdentifier(
+        connector.identifier,
+        input.agentId,
+      );
+      if (existing) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: `Agent already has a "${connector.identifier}" connector`,
+        });
+      }
+
+      await ctx.connectorModel.update(input.connectorId, {
+        metadata: { ...connector.metadata, mountedByAgentId: input.agentId },
+      });
+      return { id: input.connectorId };
+    }),
+
+  /** Unmount a connector from its agent (clears the reference lock). */
+  unmountFromAgent: connectorProcedure
+    .input(z.object({ connectorId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      const connector = await ctx.connectorModel.findById(input.connectorId);
+      if (!connector) throw new TRPCError({ code: 'NOT_FOUND', message: 'Connector not found' });
+
+      const { mountedByAgentId: _drop, ...restMeta } = connector.metadata ?? {};
+      await ctx.connectorModel.update(input.connectorId, { metadata: restMeta });
+      return { id: input.connectorId };
+    }),
+
+  /**
    * Begin the OAuth authorization-code flow for a custom MCP connector.
    *
    * Discovers the authorization server (RFC 9728 → RFC 8414), resolves the

@@ -145,9 +145,10 @@ async function deleteComposioConnector(
 }
 
 /**
- * Guard: the caller must be able to edit the agent before a Composio account is
- * bound to it. Personal-scoped (Composio connections are personal today), so
- * agent-workspace binding is intentionally out of scope here.
+ * Guard: the caller must OWN (have created) the agent before a Composio account
+ * is bound to it. Uses `existsOwnedById` (creator-only) rather than the
+ * visibility-aware `existsById`, so a member who can merely see a shared public
+ * agent can't attach their account to it.
  */
 async function assertCanEditAgent(
   db: LobeChatDatabase,
@@ -155,7 +156,7 @@ async function assertCanEditAgent(
   agentId: string,
 ): Promise<void> {
   const agentModel = new AgentModel(db, userId);
-  if (!(await agentModel.existsById(agentId))) {
+  if (!(await agentModel.existsOwnedById(agentId))) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Agent not found or not editable' });
   }
 }

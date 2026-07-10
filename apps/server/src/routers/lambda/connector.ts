@@ -188,7 +188,7 @@ export const connectorRouter = router({
     // account to someone else's agent. Scoped to the caller's user/workspace.
     if (agentId) {
       const agentModel = new AgentModel(ctx.serverDB, ctx.userId, ctx.workspaceId ?? undefined);
-      const canEdit = await agentModel.existsById(agentId);
+      const canEdit = await agentModel.existsOwnedById(agentId);
       if (!canEdit) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Agent not found or not editable' });
       }
@@ -257,7 +257,7 @@ export const connectorRouter = router({
     .input(z.object({ agentId: z.string(), connectorId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const agentModel = new AgentModel(ctx.serverDB, ctx.userId, ctx.workspaceId ?? undefined);
-      if (!(await agentModel.existsById(input.agentId))) {
+      if (!(await agentModel.existsOwnedById(input.agentId))) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Agent not found or not editable' });
       }
 
@@ -313,7 +313,7 @@ export const connectorRouter = router({
     .input(z.object({ agentId: z.string(), connectorId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const agentModel = new AgentModel(ctx.serverDB, ctx.userId, ctx.workspaceId ?? undefined);
-      if (!(await agentModel.existsById(input.agentId))) {
+      if (!(await agentModel.existsOwnedById(input.agentId))) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Agent not found or not editable' });
       }
 
@@ -345,7 +345,7 @@ export const connectorRouter = router({
     .input(z.object({ agentId: z.string(), connectorId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const agentModel = new AgentModel(ctx.serverDB, ctx.userId, ctx.workspaceId ?? undefined);
-      if (!(await agentModel.existsById(input.agentId))) {
+      if (!(await agentModel.existsOwnedById(input.agentId))) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Agent not found or not editable' });
       }
 
@@ -494,7 +494,10 @@ export const connectorRouter = router({
         id: z.string().uuid(),
         patch: createConnectorSchema
           .partial()
-          .omit({ identifier: true, sourceType: true })
+          // `agentId` is intentionally omitted: moving a connector in/out of
+          // agent scope must go through bindAgent/unbindAgent (agent edit-rights
+          // + uniqueness guards), not the generic update patch.
+          .omit({ agentId: true, identifier: true, sourceType: true })
           // Allow `null` here so an edit can clear credentials (switch to no-auth).
           .extend({ credentials: connectorCredentialsInputSchema.nullish() }),
       }),

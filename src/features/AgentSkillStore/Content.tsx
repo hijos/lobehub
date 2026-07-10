@@ -30,21 +30,23 @@ const AgentSkillStoreContent = memo<{ agentId: string }>(({ agentId }) => {
   }, [agentId, isInit, fetchAgentConnectors]);
 
   return (
-    <Flexbox gap={8} style={{ maxHeight: '70vh', overflow: 'auto' }} width={'100%'}>
+    <Flexbox gap={8} style={{ maxHeight: '75vh' }} width={'100%'}>
       {isComposioEnabled ? (
-        <div className={gridStyles.grid}>
-          {COMPOSIO_APP_TYPES.map((type) => (
-            <Item
-              agentId={agentId}
-              appSlug={type.appSlug}
-              description={type.description}
-              icon={type.icon}
-              identifier={type.identifier}
-              key={type.identifier}
-              label={type.label}
-            />
-          ))}
-        </div>
+        <Flexbox height={496} style={{ marginBlockEnd: -12, marginInline: -16, overflow: 'auto' }}>
+          <div className={gridStyles.grid}>
+            {COMPOSIO_APP_TYPES.map((type) => (
+              <Item
+                agentId={agentId}
+                appSlug={type.appSlug}
+                description={type.description}
+                icon={type.icon}
+                identifier={type.identifier}
+                key={type.identifier}
+                label={type.label}
+              />
+            ))}
+          </div>
+        </Flexbox>
       ) : (
         <Text style={{ padding: 24 }} type={'secondary'}>
           {t('settingAgent.agentTools.pickerEmpty')}

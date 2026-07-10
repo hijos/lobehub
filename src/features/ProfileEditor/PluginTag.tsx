@@ -79,6 +79,12 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
 }));
 
 export interface PluginTagProps {
+  /**
+   * When set, an identifier owned/mounted by this agent resolves as installed
+   * (agent connectors live on the agent's own rows, not the user's stores),
+   * so an agent-exclusive connector doesn't render as "Not Installed".
+   */
+  agentId?: string;
   disabled?: boolean;
   onRemove: (e: React.MouseEvent) => void;
   pluginId: string | { enabled: boolean; identifier: string; settings: Record<string, any> };
@@ -95,12 +101,25 @@ export interface PluginTagProps {
 }
 
 const PluginTag = memo<PluginTagProps>(
-  ({ pluginId, onRemove, disabled, showDesktopOnlyLabel = false, useAllMetaList = false }) => {
+  ({
+    agentId,
+    pluginId,
+    onRemove,
+    disabled,
+    showDesktopOnlyLabel = false,
+    useAllMetaList = false,
+  }) => {
     const isDarkMode = useIsDark();
     const { t } = useTranslation('setting');
 
     // Extract identifier
     const identifier = typeof pluginId === 'string' ? pluginId : pluginId?.identifier;
+
+    // Agent-scoped connectors (empty unless agentId is provided).
+    const agentConnectors = useToolStore(
+      connectorSelectors.agentConnectors(agentId ?? ''),
+      isEqual,
+    );
 
     // Get local plugin lists - use allMetaList or metaList based on prop
     const builtinList = useToolStore(
@@ -125,6 +144,33 @@ const PluginTag = memo<PluginTagProps>(
 
     // Try to find in local lists first (including Composio and LobehubSkill)
     const localMeta = useMemo(() => {
+      // Agent-owned/mounted connector: resolve as installed from the agent's own
+      // rows, since it won't appear in the user-scoped stores below.
+      if (agentId) {
+        const agentConn = agentConnectors.find((c) => c.identifier === identifier);
+        if (agentConn) {
+          const composioType = COMPOSIO_APP_TYPES.find((type) => type.identifier === identifier);
+          if (composioType) {
+            return {
+              availableInWeb: true,
+              icon: composioType.icon,
+              isInstalled: true,
+              label: composioType.label,
+              title: composioType.label,
+              type: 'composio' as const,
+            };
+          }
+          return {
+            availableInWeb: true,
+            icon: McpIcon,
+            isInstalled: true,
+            label: agentConn.name || identifier,
+            title: agentConn.name || identifier,
+            type: 'custom-connector' as const,
+          };
+        }
+      }
+
       // Check if it's a Composio server type
       if (isComposioEnabledInEnv) {
         const composioType = COMPOSIO_APP_TYPES.find((type) => type.identifier === identifier);
@@ -202,6 +248,8 @@ const PluginTag = memo<PluginTagProps>(
       return null;
     }, [
       identifier,
+      agentId,
+      agentConnectors,
       builtinList,
       installedPluginList,
       isComposioEnabledInEnv,
@@ -209,6 +257,7 @@ const PluginTag = memo<PluginTagProps>(
       isLobehubSkillEnabled,
       allLobehubSkillServers,
       customConnectors,
+      useAllMetaList,
     ]);
 
     // Fetch from remote if not found locally

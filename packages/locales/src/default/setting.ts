@@ -638,6 +638,8 @@ export default {
   'settingAgent.agentTools.connectNewPickerTitle': 'Connect a new tool for this Agent',
   'settingAgent.agentTools.copy.desc': 'Independent copy, separately configurable',
   'settingAgent.agentTools.copy.title': 'Copy user tool',
+  'settingAgent.agentTools.copyConfirm': 'Copy {{count}}',
+  'settingAgent.agentTools.copyPick': 'Select user connectors to copy into this agent',
   'settingAgent.agentTools.menuTitle': 'Add a tool for this Agent',
   'settingAgent.agentTools.mount.desc': 'Reference, syncs with user config',
   'settingAgent.agentTools.mount.title': 'Mount user tool',

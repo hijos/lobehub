@@ -1,77 +1,81 @@
 'use client';
 
-import { getActivePluginIds } from '@lobechat/types';
-import { Flexbox, Icon, Text, Tooltip } from '@lobehub/ui';
-import { Segmented } from '@lobehub/ui/base-ui';
+import { upsertPluginMode } from '@lobechat/types';
+import { Flexbox, Icon, Tooltip } from '@lobehub/ui';
 import isEqual from 'fast-deep-equal';
 import { InfoIcon } from 'lucide-react';
 import { memo, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import SharedAgentTool, { type AgentToolProps } from '@/features/ProfileEditor/AgentTool';
+import { type AgentToolProps } from '@/features/ProfileEditor/AgentTool';
 import { useAgentStore } from '@/store/agent';
 import { agentSelectors } from '@/store/agent/selectors';
 import { useToolStore } from '@/store/tool';
 import { connectorSelectors } from '@/store/tool/slices/connector';
 
-import AgentToolsTab from './AgentToolsTab';
+import AgentToolsSection from './AgentToolsSection';
+import UserToolsSection from './UserToolsSection';
 
 /**
- * The "Model & Tools" tools area on the Agent Profile page, split into two tabs:
- * - **Agent Tools** — connectors bound to this agent (Agent-only / Copy / Linked),
- *   resolved with priority over user tools of the same name at runtime.
- * - **User Tools** — the user's pinned tools (the pre-existing behavior).
+ * The profile "Model & Tools" tools area — a single page with two stacked
+ * sections: Agent Tools (top, connectors bound to this agent) and User Tools
+ * (bottom, the user's pinned tools). Agent tools resolve with priority over
+ * same-named user tools at runtime.
  */
 const AgentUserTools = memo<AgentToolProps>((props) => {
   const { agentId } = props;
   const { t } = useTranslation('setting');
-
   const activeAgentId = useAgentStore((s) => s.activeAgentId);
   const effectiveAgentId = agentId || activeAgentId || '';
 
-  const [tab, setTab] = useState<'agent' | 'user'>('user');
-
-  const config = useAgentStore(agentSelectors.getAgentConfigById(effectiveAgentId), isEqual);
-  const pinnedIds = getActivePluginIds(config?.plugins);
-  const userToolCount = pinnedIds.length;
-
-  // User tools shadowed by an agent-owned tool of the same identifier — they
-  // won't run (the agent tool wins). Surfaced as a note above the list.
-  const overriddenIds = useToolStore(
-    connectorSelectors.agentOverriddenIdentifiers(effectiveAgentId),
-    isEqual,
-  );
-  const overriddenCount = pinnedIds.filter((id) => overriddenIds.has(id)).length;
-
-  const agentConnectors = useToolStore(
-    connectorSelectors.agentConnectors(effectiveAgentId),
-    isEqual,
-  );
   const isInit = useToolStore(connectorSelectors.isAgentConnectorsInit(effectiveAgentId));
   const fetchAgentConnectors = useToolStore((s) => s.fetchAgentConnectors);
+  const copyConnectorToAgent = useToolStore((s) => s.copyConnectorToAgent);
+  const userConnectors = useToolStore(connectorSelectors.connectorList, isEqual);
+  const updateAgentConfigById = useAgentStore((s) => s.updateAgentConfigById);
 
   useEffect(() => {
     if (effectiveAgentId && !isInit) fetchAgentConnectors(effectiveAgentId);
   }, [effectiveAgentId, isInit, fetchAgentConnectors]);
 
+  const [copyMode, setCopyMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+
+  const toggleSelected = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const resetCopy = () => {
+    setCopyMode(false);
+    setSelected(new Set());
+  };
+
+  const handleConfirmCopy = async () => {
+    const identifiers: string[] = [];
+    for (const id of selected) {
+      const conn = userConnectors.find((c) => c.id === id);
+      if (!conn) continue;
+      await copyConnectorToAgent(id, effectiveAgentId);
+      identifiers.push(conn.identifier);
+    }
+    // Pin the copied tools for the agent so the runtime resolves them.
+    if (identifiers.length > 0) {
+      const config = agentSelectors.getAgentConfigById(effectiveAgentId)(useAgentStore.getState());
+      let plugins = config?.plugins;
+      for (const identifier of identifiers)
+        plugins = upsertPluginMode(plugins, identifier, 'pinned');
+      await updateAgentConfigById(effectiveAgentId, { plugins });
+    }
+    resetCopy();
+  };
+
   return (
-    <Flexbox gap={12} width={'100%'}>
-      <Flexbox horizontal align={'center'} gap={8} justify={'space-between'}>
-        <Segmented
-          size={'small'}
-          value={tab}
-          options={[
-            {
-              label: `${t('settingAgent.agentTools.tabAgent')}  ${agentConnectors.length}`,
-              value: 'agent',
-            },
-            {
-              label: `${t('settingAgent.agentTools.tabUser')}  ${userToolCount}`,
-              value: 'user',
-            },
-          ]}
-          onChange={(v) => setTab(v as 'agent' | 'user')}
-        />
+    <Flexbox gap={16} width={'100%'}>
+      <Flexbox horizontal align={'center'} justify={'flex-end'}>
         <Tooltip title={t('settingAgent.agentTools.priorityTooltip')}>
           <Flexbox
             horizontal
@@ -85,18 +89,17 @@ const AgentUserTools = memo<AgentToolProps>((props) => {
         </Tooltip>
       </Flexbox>
 
-      {tab === 'agent' ? (
-        <AgentToolsTab agentId={effectiveAgentId} />
-      ) : (
-        <Flexbox gap={8}>
-          {overriddenCount > 0 && (
-            <Text style={{ fontSize: 12 }} type={'secondary'}>
-              {t('settingAgent.agentTools.overriddenNote', { count: overriddenCount })}
-            </Text>
-          )}
-          <SharedAgentTool {...props} />
-        </Flexbox>
-      )}
+      <AgentToolsSection agentId={effectiveAgentId} onStartCopy={() => setCopyMode(true)} />
+
+      <UserToolsSection
+        {...props}
+        agentId={effectiveAgentId}
+        copyMode={copyMode}
+        selected={selected}
+        toggleSelected={toggleSelected}
+        onCancelCopy={resetCopy}
+        onConfirmCopy={handleConfirmCopy}
+      />
     </Flexbox>
   );
 });

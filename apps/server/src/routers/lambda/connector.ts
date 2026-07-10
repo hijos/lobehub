@@ -2,6 +2,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
 import { wsCompatProcedure } from '@/business/server/trpc-middlewares/workspaceAuth';
+import { AgentModel } from '@/database/models/agent';
 import { ConnectorModel } from '@/database/models/connector';
 import { ConnectorToolModel } from '@/database/models/connectorTool';
 import { PluginModel } from '@/database/models/plugin';
@@ -68,6 +69,13 @@ const connectorCredentialsInputSchema = z.discriminatedUnion('type', [
 ]);
 
 const createConnectorSchema = z.object({
+  /**
+   * Bind this connector to a specific agent (Agent > Workspace/Personal). When
+   * set, the row is agent-scoped: it only resolves for that agent's runs and
+   * holds the agent's own credentials (service-account pattern). The caller must
+   * be able to edit the agent. Omit for a normal personal/workspace connector.
+   */
+  agentId: z.string().optional(),
   credentials: connectorCredentialsInputSchema.optional(),
   identifier: z.string().min(1).max(255),
   isEnabled: z.boolean().optional().default(true),
@@ -116,6 +124,28 @@ export const connectorRouter = router({
   }),
 
   /**
+   * List the connectors bound to a specific agent (agent-scoped rows only). The
+   * agent-settings UI uses this to show + manage the agent's own connectors,
+   * which the base `list` deliberately excludes.
+   */
+  listByAgent: connectorProcedure
+    .input(z.object({ agentId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      const connectors = await ctx.connectorModel.queryByAgent(input.agentId);
+
+      return Promise.all(
+        connectors.map(async (c) => {
+          const tools = await ctx.connectorToolModel.queryByConnector(c.id);
+          const { credentials: _credentials, oidcConfig, ...rest } = c;
+          const safeOidcConfig = oidcConfig
+            ? { ...oidcConfig, clientSecret: undefined }
+            : oidcConfig;
+          return { ...rest, oidcConfig: safeOidcConfig, tools };
+        }),
+      );
+    }),
+
+  /**
    * Return the connector record with decrypted user-set credentials so the
    * edit form can pre-fill accurately. Only the connector owner can call this
    * (enforced by connectorProcedure ownership check).
@@ -151,6 +181,19 @@ export const connectorRouter = router({
   // ── Mutations ─────────────────────────────────────────────────────────────
 
   create: connectorProcedure.input(createConnectorSchema).mutation(async ({ input, ctx }) => {
+    const { agentId } = input;
+
+    // Agent-scoped connector: the caller must be able to edit the target agent
+    // before a credential is bound to it — otherwise a user could attach their
+    // account to someone else's agent. Scoped to the caller's user/workspace.
+    if (agentId) {
+      const agentModel = new AgentModel(ctx.serverDB, ctx.userId, ctx.workspaceId ?? undefined);
+      const canEdit = await agentModel.existsById(agentId);
+      if (!canEdit) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Agent not found or not editable' });
+      }
+    }
+
     const fields = {
       // The model expects the decrypted JSON string and encrypts it at rest.
       credentials: input.credentials ? JSON.stringify(input.credentials) : null,
@@ -174,7 +217,14 @@ export const connectorRouter = router({
     // listings (selector filters on sourceType === 'custom'). Safe because the
     // other callers (`AddConnectorModal`, marketplace bootstrap) always pass
     // the same sourceType they originally created the row with.
-    const [existing] = await ctx.connectorModel.queryByIdentifiers([input.identifier]);
+    // Idempotent within the EXACT scope (this agent's row, or the base row when
+    // no agentId). The exact-scope lookup is critical: creating an agent
+    // connector must not update the personal/workspace row of the same
+    // identifier, and re-adding the same agent connector updates its own row —
+    // enforcing "one connector per identifier per agent" at the app layer (the
+    // DB indexes are non-unique so multiple same-identifier rows can coexist
+    // across scopes).
+    const existing = await ctx.connectorModel.findScopedByIdentifier(input.identifier, agentId);
     if (existing) {
       await ctx.connectorModel.update(existing.id, {
         ...fields,
@@ -187,12 +237,72 @@ export const connectorRouter = router({
 
     return ctx.connectorModel.create({
       ...fields,
+      agentId: agentId ?? null,
       identifier: input.identifier,
       isEnabled: input.isEnabled ?? true,
       sourceType: input.sourceType,
       status: ConnectorStatus.disconnected,
     });
   }),
+
+  /**
+   * Bind an existing connector to an agent (transfer it into the agent scope).
+   * The connector then resolves only for that agent's runs and shadows the
+   * user's base connector of the same identifier (Agent > Workspace/Personal).
+   *
+   * Guards: the caller must be able to edit the agent; the agent must not
+   * already have a connector for this identifier (one per identifier per agent).
+   */
+  bindAgent: connectorProcedure
+    .input(z.object({ agentId: z.string(), connectorId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      const agentModel = new AgentModel(ctx.serverDB, ctx.userId, ctx.workspaceId ?? undefined);
+      if (!(await agentModel.existsById(input.agentId))) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Agent not found or not editable' });
+      }
+
+      const connector = await ctx.connectorModel.findById(input.connectorId);
+      if (!connector) throw new TRPCError({ code: 'NOT_FOUND', message: 'Connector not found' });
+
+      const existingAgentRow = await ctx.connectorModel.findScopedByIdentifier(
+        connector.identifier,
+        input.agentId,
+      );
+      if (existingAgentRow && existingAgentRow.id !== connector.id) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: `Agent already has a "${connector.identifier}" connector`,
+        });
+      }
+
+      await ctx.connectorModel.update(input.connectorId, { agentId: input.agentId });
+      return { id: input.connectorId };
+    }),
+
+  /**
+   * Unbind a connector from its agent, returning it to the personal/workspace
+   * scope. Rejected when a base connector of the same identifier already exists,
+   * to keep the base scope single-per-identifier — the caller should delete the
+   * agent connector instead of demoting it into a collision.
+   */
+  unbindAgent: connectorProcedure
+    .input(z.object({ connectorId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      const connector = await ctx.connectorModel.findById(input.connectorId);
+      if (!connector) throw new TRPCError({ code: 'NOT_FOUND', message: 'Connector not found' });
+      if (!connector.agentId) return { id: input.connectorId }; // already base — no-op
+
+      const existingBase = await ctx.connectorModel.findScopedByIdentifier(connector.identifier);
+      if (existingBase) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: `A personal "${connector.identifier}" connector already exists; delete the agent connector instead`,
+        });
+      }
+
+      await ctx.connectorModel.update(input.connectorId, { agentId: null });
+      return { id: input.connectorId };
+    }),
 
   /**
    * Begin the OAuth authorization-code flow for a custom MCP connector.

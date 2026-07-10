@@ -152,8 +152,8 @@ const ProfileEditor = memo(() => {
                     updateConfig(value);
                   }}
                 />
-                <AgentTool />
               </Flexbox>
+              <AgentTool />
             </Flexbox>
           </>
         )}

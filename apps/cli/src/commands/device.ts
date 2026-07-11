@@ -119,7 +119,14 @@ export function registerDeviceCommand(program: Command) {
       // no-op on a workspace device yet still print success. `listDevices`
       // already returns both pools (only when a workspace context is set).
       const devices = await client.device.listDevices.query();
-      const byId = new Map<string, any>(devices.map((d: any) => [d.deviceId, d]));
+      // With --workspace the caller asked to act on the WORKSPACE pool only.
+      // `listDevices` returns the personal+workspace union, so without this
+      // filter an id that names a personal device would silently delete the
+      // personal registration instead. Mirrors the `list` command's filter.
+      const candidates = options.workspace
+        ? devices.filter((d: any) => d.scope === 'workspace')
+        : devices;
+      const byId = new Map<string, any>(candidates.map((d: any) => [d.deviceId, d]));
 
       let failed = 0;
       for (const deviceId of deviceIds) {

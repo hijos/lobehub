@@ -66,11 +66,17 @@ export async function mintWorkspaceConnectToken(
   return trpc.device.mintWorkspaceConnectToken.mutate();
 }
 
-/** Register this machine as a device of the given workspace (owner-only). */
+/**
+ * Register this machine as a device of the given workspace (member+).
+ * `visibility: 'public'` enrolls it into the shared pool visible to every
+ * member (`lh connect --workspace <id> --public`); omitted → the server
+ * default (private, visible only to the enroller).
+ */
 export async function registerWorkspaceDevice(
   auth: Auth,
   identity: DeviceIdentity,
   workspaceId: string,
+  visibility?: 'private' | 'public',
 ): Promise<void> {
   const trpc = createLambdaClient(auth, workspaceId);
   await trpc.device.registerWorkspaceDevice.mutate({
@@ -78,5 +84,6 @@ export async function registerWorkspaceDevice(
     hostname: os.hostname(),
     identitySource: identity.identitySource,
     platform: process.platform,
+    visibility,
   });
 }

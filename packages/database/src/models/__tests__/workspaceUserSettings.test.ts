@@ -72,6 +72,27 @@ describe('WorkspaceUserSettingsModel', () => {
     });
   });
 
+  it('deep-merges agentDeviceOverrides so a single-agent patch never drops other agents', async () => {
+    const model = new WorkspaceUserSettingsModel(serverDB, userA, workspaceId);
+    await model.updatePreference({
+      agentDeviceOverrides: { agentX: { executionTarget: 'sandbox' } },
+    });
+
+    // A client with a stale/empty local copy patches ONLY agentY — agentX's
+    // saved choice must survive the write.
+    await model.updatePreference({
+      agentDeviceOverrides: {
+        agentY: { boundDeviceId: 'device-Y', executionTarget: 'device' },
+      },
+    });
+
+    const preference = await model.getPreference();
+    expect(preference.agentDeviceOverrides).toEqual({
+      agentX: { executionTarget: 'sandbox' },
+      agentY: { boundDeviceId: 'device-Y', executionTarget: 'device' },
+    });
+  });
+
   it("isolates users' rows so one caller can never observe another's preference", async () => {
     const modelA = new WorkspaceUserSettingsModel(serverDB, userA, workspaceId);
     const modelB = new WorkspaceUserSettingsModel(serverDB, userB, workspaceId);

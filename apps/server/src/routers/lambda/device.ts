@@ -1148,14 +1148,31 @@ export const deviceRouter = router({
           message: 'Only the enrolling member or a workspace owner can remove this device.',
         });
       }
-      // Best-effort: tell a live device to drop its workspace connection and
-      // stop auto-reconnecting, so removal doesn't leave an online ghost. The
-      // row is deleted regardless — an offline device simply stops resolving.
-      await deviceGateway.unenrollWorkspace({
+      // Tell a live device to drop its workspace connection and stop
+      // auto-reconnecting, so removal doesn't leave an online ghost. For most
+      // rows this stays best-effort — an offline device simply stops resolving.
+      const unenrolled = await deviceGateway.unenrollWorkspace({
         deviceId: input.deviceId,
         userId: ctx.userId,
         workspaceId: ctx.workspaceId,
       });
+      // PRIVATE rows are the exception: the row is the only thing
+      // `queryWorkspaceHiddenDeviceIds` uses to hide this device's socket from
+      // other members, so deleting it under a still-live socket (old client
+      // without the unenroll handler, RPC error) would resurface the private
+      // machine as a public transient. Fail the removal while the socket is
+      // demonstrably alive; a dead socket can't ghost, so an offline device
+      // still deletes fine.
+      if (!unenrolled.success && row.visibility === 'private') {
+        const online = await deviceGateway.queryDeviceList(ctx.userId, ctx.workspaceId);
+        if (online.some((d) => d.deviceId === input.deviceId)) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message:
+              'The device is still connected but did not acknowledge the unenroll — retry once it has disconnected or updated its client.',
+          });
+        }
+      }
       await model.deleteWorkspaceDevice(input.deviceId);
       return { success: true };
     }),

@@ -2243,6 +2243,7 @@ export class AiAgentService {
     const toolExecutorMap: Record<string, ToolExecutor> = {};
     let onlineDevices: DeviceAttachment[] = [];
     let activeDeviceId: string | undefined;
+    let activeDeviceScope: 'personal' | 'workspace' | undefined;
     let executionPlan: ExecutionPlan | undefined;
     let hasAgentDocuments = false;
     let hasEnabledKnowledgeBases = false;
@@ -2657,10 +2658,21 @@ export class AiAgentService {
       // follow the user's choice, never re-list or switch machines mid-run.
       const deviceLocked = isDeviceLockedPlan(executionPlan);
       activeDeviceId = executionPlan.kind === 'device' ? executionPlan.deviceId : undefined;
+      // Which principal pool the routed device lives in. A workspace run with a
+      // per-user `local` override (LOBE-11689) routes to the caller's PERSONAL
+      // device — the union above added it from the personal pool — and the
+      // device runtimes must address it via `(userId, deviceId)`, not the
+      // `workspace:<id>` pool where it has no connection. Carried through
+      // operation metadata into `ToolExecutionContext` and read by
+      // `resolveRunWorkspaceId`.
+      activeDeviceScope = activeDeviceId
+        ? onlineDevices.find((d) => d.deviceId === activeDeviceId)?.scope
+        : undefined;
       log(
-        'execAgent: execution plan → kind=%s deviceId=%s',
+        'execAgent: execution plan → kind=%s deviceId=%s scope=%s',
         executionPlan.kind,
         activeDeviceId ?? 'none',
+        activeDeviceScope ?? 'none',
       );
       // A device-targeted run that could not be routed silently degrades exec
       // (lobe-skills runCommand/execScript) to the cloud sandbox. Surface it as
@@ -3617,6 +3629,7 @@ export class AiAgentService {
     try {
       const result = await this.agentRuntimeService.createOperation({
         activeDeviceId,
+        activeDeviceScope,
         agentConfig,
         agentGroup: operationAgentGroup,
         deviceSystemInfo: Object.keys(deviceSystemInfo).length > 0 ? deviceSystemInfo : undefined,

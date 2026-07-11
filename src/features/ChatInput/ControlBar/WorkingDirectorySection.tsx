@@ -6,10 +6,12 @@ import { memo } from 'react';
 
 import SafeBoundary from '@/components/ErrorBoundary';
 import { resolveTargetDeviceId } from '@/helpers/agentWorkingDirectory';
-import { getWorkingDirectoryPathString } from '@/helpers/workingDirectoryPath';
+import { getConfigRepoType, getWorkingDirectoryPathString } from '@/helpers/workingDirectoryPath';
 import { useEffectiveWorkingDirectory } from '@/hooks/useEffectiveWorkingDirectory';
 import { useAgentStore } from '@/store/agent';
 import { agentByIdSelectors } from '@/store/agent/selectors';
+import { useChatStore } from '@/store/chat';
+import { topicSelectors } from '@/store/chat/selectors';
 import { deviceSelectors, useDeviceStore } from '@/store/device';
 import { useElectronStore } from '@/store/electron';
 
@@ -58,7 +60,18 @@ const WorkingDirectorySectionInner = memo<WorkingDirectorySectionProps>(({ agent
     currentEntry?.repoType === 'git' || currentEntry?.repoType === 'github'
       ? currentEntry.repoType
       : undefined;
-  const repoType = isLocalDevice ? localRepoType : remoteRepoType;
+
+  // Live probes (fs / cached device dirs) can't resolve repoType for a worktree
+  // path that was never registered as a device working dir — so fall back to the
+  // repoType persisted on the topic (the same snapshot the meta hover card reads).
+  // Without this the whole GitStatus is gated out and branch/worktree/PR chips
+  // vanish even though the topic clearly carries git context.
+  const topicWorkingDirectoryConfig = useChatStore(
+    (s) => topicSelectors.currentTopicMetadata(s)?.workingDirectoryConfig,
+  );
+  const repoType =
+    (isLocalDevice ? localRepoType : remoteRepoType) ??
+    getConfigRepoType(topicWorkingDirectoryConfig);
 
   return (
     <>

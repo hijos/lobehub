@@ -477,6 +477,10 @@ export default class GatewayConnectionService extends ServiceModule {
    * `registerWorkspaceDevice` itself on this path).
    */
   async enrollWorkspace(params: EnrollWorkspaceParams): Promise<EnrollWorkspaceResult> {
+    // Dry-run probe: return the derived identity so the server can detect an
+    // existing enrollment (and ask for overwrite confirmation) without this
+    // machine opening or persisting anything.
+    if (params.identityOnly) return this.resolveWorkspaceDeviceIdentity(params.workspaceId);
     const identity = await this.openWorkspaceClient(params.workspaceId, params.token);
     this.persistWorkspaceEnrollment(params.workspaceId);
     logger.info(`Enrolled into workspace ${params.workspaceId} as device ${identity.deviceId}`);

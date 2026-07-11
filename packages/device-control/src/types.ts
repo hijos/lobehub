@@ -214,6 +214,14 @@ export interface DeviceControlDeps extends SkillDirectoryDeps, WorkspaceScanDeps
 // ─── Workspace enrollment (remote share) ───
 
 export interface EnrollWorkspaceParams {
+  /**
+   * Only derive and return the workspace identity — do NOT open a share
+   * connection or persist enrollment state. Lets the server check for an
+   * existing enrollment (and ask the user to confirm an overwrite) before the
+   * device mutates anything. Older clients ignore this flag and enroll on the
+   * probe, which degrades to the pre-flag behaviour.
+   */
+  identityOnly?: boolean;
   /** Short-lived workspace-device connect token (carries the workspace claim). */
   token: string;
   workspaceId: string;

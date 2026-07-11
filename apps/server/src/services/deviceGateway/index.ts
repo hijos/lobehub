@@ -261,6 +261,13 @@ export class DeviceGateway {
    */
   async enrollWorkspace(params: {
     deviceId: string;
+    /**
+     * Dry-run: the device only derives and returns its workspace identity,
+     * without opening a share connection or persisting enrollment state.
+     * Older clients ignore the flag and enroll on the probe (pre-flag
+     * behaviour), so callers must treat the probe as possibly-enrolling.
+     */
+    identityOnly?: boolean;
     timeout?: number;
     token: string;
     userId: string;
@@ -270,7 +277,7 @@ export class DeviceGateway {
     identity?: { deviceId: string; identitySource: 'fallback' | 'machine-id' };
     success: boolean;
   }> {
-    const { deviceId, timeout = 30_000, token, userId, workspaceId } = params;
+    const { deviceId, identityOnly, timeout = 30_000, token, userId, workspaceId } = params;
     const client = this.getClient();
     if (!client) return { error: 'Device Gateway is not configured', success: false };
 
@@ -280,7 +287,10 @@ export class DeviceGateway {
         identitySource: 'fallback' | 'machine-id';
       }>(
         { deviceId, timeout, userId },
-        { method: 'enrollWorkspace', params: { token, workspaceId } },
+        {
+          method: 'enrollWorkspace',
+          params: { ...(identityOnly ? { identityOnly } : {}), token, workspaceId },
+        },
       );
 
       if (!result.success || !result.data) {

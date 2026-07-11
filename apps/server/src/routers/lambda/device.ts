@@ -24,7 +24,7 @@ import { signWorkspaceDeviceToken } from '@/libs/trpc/utils/internalJwt';
 import { type DeviceAttachment, deviceGateway } from '@/server/services/deviceGateway';
 
 import { preserveWorkspaceCache } from './deviceWorkingDirs';
-import { assertWorkspaceRootApproved } from './deviceWorkspaceGuard';
+import { assertWorkspaceDeviceVisible, assertWorkspaceRootApproved } from './deviceWorkspaceGuard';
 import { workingDirConfigSchema } from './workingDirSchema';
 
 // Derive the zod enum from the canonical config so new platforms are
@@ -66,13 +66,25 @@ const wsWritableProcedure = wsProcedure.use(requireWorkspaceRole('member'));
 // Workspace-aware (compat): with an `X-Workspace-Id` header the device list also
 // surfaces the workspace's shared devices; without it, the personal path is
 // unchanged (`ctx.workspaceId === undefined`).
+//
+// Every route below that takes a `deviceId` input also passes the workspace
+// visibility gate — see `assertWorkspaceDeviceVisible` for why filtering the
+// list paths alone is not enough.
 const deviceProcedure = wsCompatProcedure.use(serverDatabase).use(async (opts) => {
   const { ctx } = opts;
   const wsId = ctx.workspaceId ?? undefined;
+  const deviceModel = new DeviceModel(ctx.serverDB, ctx.userId, wsId);
+
+  if (wsId) {
+    const raw = (await opts.getRawInput()) as { deviceId?: unknown } | undefined;
+    if (typeof raw?.deviceId === 'string') {
+      await assertWorkspaceDeviceVisible(deviceModel, raw.deviceId);
+    }
+  }
 
   return opts.next({
     ctx: {
-      deviceModel: new DeviceModel(ctx.serverDB, ctx.userId, wsId),
+      deviceModel,
       userId: ctx.userId,
       workspaceId: wsId,
     },
@@ -950,23 +962,29 @@ export const deviceRouter = router({
       }
 
       const token = await signWorkspaceDeviceToken(ctx.workspaceId);
-      const result = await deviceGateway.enrollWorkspace({
+      // Identity-only probe: learn the machine's workspace deviceId WITHOUT the
+      // device opening or persisting a share connection, so backing out of the
+      // overwrite confirmation leaves the device untouched. Older clients
+      // ignore the flag and enroll here — that degrades to the pre-flag
+      // behaviour, never worse.
+      const probe = await deviceGateway.enrollWorkspace({
         deviceId: personal.deviceId,
+        identityOnly: true,
         token,
         userId: ctx.userId,
         workspaceId: ctx.workspaceId,
       });
-      if (!result.success || !result.identity) {
+      if (!probe.success || !probe.identity) {
         throw new TRPCError({
           code: 'PRECONDITION_FAILED',
-          message: result.error ?? 'Device is offline or does not support workspace sharing.',
+          message: probe.error ?? 'Device is offline or does not support workspace sharing.',
         });
       }
 
       // Caller-invisible rows (another member's private enrollment) resolve to
       // undefined and fall through to the upsert, whose conflict branch handles
       // that case (auto-publish) — same fail-closed shape as the other lookups.
-      const existing = await model.findWorkspaceDeviceById(result.identity.deviceId);
+      const existing = await model.findWorkspaceDeviceById(probe.identity.deviceId);
       if (existing) {
         if (!input.confirmOverwrite) {
           return {
@@ -983,6 +1001,24 @@ export const deviceRouter = router({
             message: 'Only the enrolling member or a workspace owner can overwrite this device.',
           });
         }
+      }
+
+      // Real enrollment — only after the caller is committed (no pending
+      // confirmation and permission checks passed).
+      const result = await deviceGateway.enrollWorkspace({
+        deviceId: personal.deviceId,
+        token,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+      });
+      if (!result.success || !result.identity) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: result.error ?? 'Device is offline or does not support workspace sharing.',
+        });
+      }
+
+      if (existing) {
         const row = await model.overwriteSharedWorkspaceDevice(existing.deviceId, {
           sharedFromDeviceId: personal.deviceId,
           visibility: input.visibility ?? 'private',

@@ -575,7 +575,15 @@ async function runConnect(options: ConnectOptions, isDaemonChild: boolean) {
       return { success: true };
     };
   } else {
-    deviceControlDeps.enrollWorkspace = async ({ token: wsToken, workspaceId: wsId }) => {
+    deviceControlDeps.enrollWorkspace = async ({
+      identityOnly,
+      token: wsToken,
+      workspaceId: wsId,
+    }) => {
+      // Dry-run probe: hand the server our derived identity so it can detect
+      // an existing enrollment (and ask for overwrite confirmation) without
+      // this machine opening or persisting anything.
+      if (identityOnly) return resolveWorkspaceDeviceIdentity(wsId);
       const wsIdentity = await openWorkspaceConnection(wsId, wsToken);
       // Persist so a restart re-opens the share connection without the server
       // having to re-share. The server registers the device row itself from

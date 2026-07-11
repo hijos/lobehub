@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getTestDB } from '../../core/getTestDB';
 import { devices, users, workspaces } from '../../schemas';
 import type { LobeChatDatabase } from '../../type';
-import { DeviceModel } from '../device';
+import { DeviceModel, WorkspaceDevicePrivateConflictError } from '../device';
 
 const serverDB: LobeChatDatabase = await getTestDB();
 
@@ -163,11 +163,14 @@ describe('DeviceModel', () => {
     });
 
     it('dedupes a machine enrolled into one workspace by different admins to a single row', async () => {
-      // admin A enrolls machine "wdev" into the workspace
+      // admin A enrolls machine "wdev" into the workspace (public — a
+      // cross-user collision with a PRIVATE row fails closed, covered in the
+      // visibility suite below)
       await new DeviceModel(serverDB, userId, wsId).registerWorkspaceDevice({
         deviceId: 'wdev',
         hostname: 'A-host',
         identitySource: 'machine-id',
+        visibility: 'public',
         workspaceId: wsId,
       });
       // admin B enrolls the SAME machine (same deviceId) into the SAME workspace
@@ -366,7 +369,7 @@ describe('DeviceModel', () => {
         expect(enrollerShares.map((s) => s.deviceId)).not.toContain('wdev');
       });
 
-      it('a DIFFERENT member enrolling a private machine auto-publishes it', async () => {
+      it('a DIFFERENT member colliding with a private enrollment fails closed', async () => {
         await new DeviceModel(serverDB, userId, wsId).registerWorkspaceDevice({
           deviceId: 'wdev',
           identitySource: 'machine-id',
@@ -374,9 +377,32 @@ describe('DeviceModel', () => {
           workspaceId: wsId,
         });
 
-        // Two members independently operating the same machine ⇒ shared infra;
-        // without the upgrade the second enrollment would vanish into a row the
-        // second member can't even see.
+        // deviceId is client-supplied — the server can't prove this is the same
+        // physical machine, so the collision must not publish (or otherwise
+        // mutate) the enroller's private row.
+        await expect(
+          new DeviceModel(serverDB, otherUserId, wsId).registerWorkspaceDevice({
+            deviceId: 'wdev',
+            identitySource: 'machine-id',
+            workspaceId: wsId,
+          }),
+        ).rejects.toThrow(WorkspaceDevicePrivateConflictError);
+
+        // the enroller's row is untouched
+        const row = await new DeviceModel(serverDB, userId, wsId).findWorkspaceDeviceById('wdev');
+        expect(row?.visibility).toBe('private');
+        expect(row?.userId).toBe(userId);
+      });
+
+      it('a DIFFERENT member re-enrolling a PUBLIC machine refreshes it without demoting', async () => {
+        await new DeviceModel(serverDB, userId, wsId).registerWorkspaceDevice({
+          deviceId: 'wdev',
+          identitySource: 'machine-id',
+          visibility: 'public',
+          workspaceId: wsId,
+        });
+
+        // legit shared-infra flow: second member re-enrolls the shared box
         const row = await new DeviceModel(serverDB, otherUserId, wsId).registerWorkspaceDevice({
           deviceId: 'wdev',
           identitySource: 'machine-id',

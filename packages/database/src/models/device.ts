@@ -8,6 +8,23 @@ import { buildWorkspaceWhere } from '../utils/workspace';
 
 export type DeviceVisibility = 'private' | 'public';
 
+/**
+ * A workspace enrollment collided with ANOTHER member's PRIVATE row.
+ * `registerWorkspaceDevice` fails closed on this instead of mutating the row —
+ * deviceId is client-supplied, so treating the collision as "same physical
+ * machine" would let any member expose a device its enroller kept private.
+ * Routers map this to a CONFLICT response telling the caller to ask the
+ * enroller (or an owner) to publish the device first.
+ */
+export class WorkspaceDevicePrivateConflictError extends Error {
+  constructor(deviceId: string) {
+    super(
+      `Device "${deviceId}" is already privately enrolled by another workspace member — ask them (or a workspace owner) to publish it first.`,
+    );
+    this.name = 'WorkspaceDevicePrivateConflictError';
+  }
+}
+
 export interface RegisterDeviceParams {
   deviceId: string;
   hostname?: string | null;
@@ -96,6 +113,24 @@ export class DeviceModel {
       workspaceId: string;
     },
   ) => {
+    // `deviceId` is CLIENT-SUPPLIED (explicit `--device-id`, stale cache) — the
+    // server cannot verify it names this physical machine. If it collides with
+    // another member's PRIVATE enrollment, fail closed instead of touching the
+    // row: auto-publishing (or otherwise mutating) here would let any member
+    // expose a machine its enroller deliberately kept private. The genuine
+    // shared-box flow recovers by the enroller (or an owner) publishing the
+    // device first. Checked pre-upsert; the racing window is fail-safe because
+    // the conflict branch below never changes visibility across users.
+    const conflicting = await this.db.query.devices.findFirst({
+      where: and(
+        eq(devices.workspaceId, params.workspaceId),
+        eq(devices.deviceId, params.deviceId),
+      ),
+    });
+    if (conflicting && conflicting.userId !== this.userId && conflicting.visibility === 'private') {
+      throw new WorkspaceDevicePrivateConflictError(params.deviceId);
+    }
+
     const now = new Date();
     const [result] = await this.db
       .insert(devices)
@@ -125,12 +160,13 @@ export class DeviceModel {
       //     row private would make the flag a no-op on re-enroll. Callers pass
       //     `visibility` only when the user chose explicitly, so a plain
       //     reconnect (undefined) still preserves the stored choice;
-      //   - a re-enroll by the SAME member preserves the stored choice;
-      //   - a DIFFERENT member enrolling a machine that sits in someone else's
-      //     private pool auto-publishes: two members independently operating the
-      //     same machine means it's shared infra, and without the upgrade the
-      //     second enroller's enrollment would vanish into a row they can't even
-      //     see. (An explicit 'private' never demotes here for the same reason.)
+      //   - anything else preserves the stored choice. An explicit 'private'
+      //     never demotes a published row here — pulling a shared device out of
+      //     the pool must stay an explicit `setWorkspaceDeviceVisibility` call.
+      // A DIFFERENT member colliding with an existing PRIVATE row never reaches
+      // this upsert — the guard above fails closed (see
+      // `WorkspaceDevicePrivateConflictError`); a cross-user collision with a
+      // public row is the legit shared-infra flow and just refreshes liveness.
       // The partial unique index requires its predicate be repeated in
       // `targetWhere`.
       .onConflictDoUpdate({
@@ -139,10 +175,7 @@ export class DeviceModel {
           identitySource: params.identitySource,
           lastSeenAt: now,
           platform: params.platform,
-          visibility:
-            params.visibility === 'public'
-              ? 'public'
-              : sql`CASE WHEN ${devices.userId} <> excluded.user_id AND ${devices.visibility} = 'private' THEN 'public' ELSE ${devices.visibility} END`,
+          visibility: params.visibility === 'public' ? 'public' : sql`${devices.visibility}`,
         },
         target: [devices.workspaceId, devices.deviceId],
         targetWhere: sql`${devices.workspaceId} IS NOT NULL`,

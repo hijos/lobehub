@@ -16,7 +16,7 @@ import {
   wsCompatProcedure,
   wsProcedure,
 } from '@/business/server/trpc-middlewares/workspaceAuth';
-import { DeviceModel } from '@/database/models/device';
+import { DeviceModel, WorkspaceDevicePrivateConflictError } from '@/database/models/device';
 import { UserModel } from '@/database/models/user';
 import { router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
@@ -918,7 +918,14 @@ export const deviceRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const model = new DeviceModel(ctx.serverDB, ctx.userId, ctx.workspaceId);
-      return model.registerWorkspaceDevice({ ...input, workspaceId: ctx.workspaceId });
+      try {
+        return await model.registerWorkspaceDevice({ ...input, workspaceId: ctx.workspaceId });
+      } catch (error) {
+        if (error instanceof WorkspaceDevicePrivateConflictError) {
+          throw new TRPCError({ code: 'CONFLICT', message: error.message });
+        }
+        throw error;
+      }
     }),
 
   /**
@@ -982,8 +989,9 @@ export const deviceRouter = router({
       }
 
       // Caller-invisible rows (another member's private enrollment) resolve to
-      // undefined and fall through to the upsert, whose conflict branch handles
-      // that case (auto-publish) — same fail-closed shape as the other lookups.
+      // undefined and fall through to `registerWorkspaceDevice`, which fails
+      // closed on that collision (`WorkspaceDevicePrivateConflictError`, mapped
+      // to CONFLICT below) — same fail-closed shape as the other lookups.
       const existing = await model.findWorkspaceDeviceById(probe.identity.deviceId);
       if (existing) {
         if (!input.confirmOverwrite) {
@@ -1035,15 +1043,23 @@ export const deviceRouter = router({
         };
       }
 
-      const row = await model.registerWorkspaceDevice({
-        deviceId: result.identity.deviceId,
-        hostname: personal.hostname,
-        identitySource: result.identity.identitySource,
-        platform: personal.platform,
-        sharedFromDeviceId: personal.deviceId,
-        visibility: input.visibility,
-        workspaceId: ctx.workspaceId,
-      });
+      let row;
+      try {
+        row = await model.registerWorkspaceDevice({
+          deviceId: result.identity.deviceId,
+          hostname: personal.hostname,
+          identitySource: result.identity.identitySource,
+          platform: personal.platform,
+          sharedFromDeviceId: personal.deviceId,
+          visibility: input.visibility,
+          workspaceId: ctx.workspaceId,
+        });
+      } catch (error) {
+        if (error instanceof WorkspaceDevicePrivateConflictError) {
+          throw new TRPCError({ code: 'CONFLICT', message: error.message });
+        }
+        throw error;
+      }
       // Carry the personal alias over on first share so the workspace list shows
       // the machine under the name its owner gave it; never clobber a name a
       // re-share conflict-preserved.

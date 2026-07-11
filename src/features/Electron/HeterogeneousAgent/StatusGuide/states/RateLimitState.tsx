@@ -1,5 +1,7 @@
 import { Text } from '@lobehub/ui';
+import { Button } from '@lobehub/ui/base-ui';
 import { createStaticStyles } from 'antd-style';
+import { CalendarClock, Play, RotateCcw } from 'lucide-react';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -8,6 +10,12 @@ import GuideShell from '../GuideShell';
 import type { HeterogeneousAgentGuideStateProps } from '../types';
 
 const styles = createStaticStyles(({ css }) => ({
+  actions: css`
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+  `,
   details: css`
     display: grid;
     grid-template-columns: max-content minmax(0, 1fr);
@@ -30,10 +38,18 @@ const extractTimezoneLabel = (value?: string) => {
   return match?.[1];
 };
 
-const RateLimitState = ({ config, error, onRetry, variant }: HeterogeneousAgentGuideStateProps) => {
+const RateLimitState = ({
+  config,
+  error,
+  onRetry,
+  schedule,
+  variant,
+}: HeterogeneousAgentGuideStateProps) => {
   const { t, i18n } = useTranslation('chat');
   const rawErrorDetails = error?.stderr || error?.message;
-  const resetsAt = error?.rateLimitInfo?.resetsAt;
+  // Prefer the persisted scheduled reset time so the "scheduled" copy stays
+  // stable even if the live error payload is missing it on reload.
+  const resetsAt = schedule?.resetsAt ?? error?.rateLimitInfo?.resetsAt;
   const canRetry = !resetsAt || resetsAt * 1000 <= Date.now();
   const dateLocale = i18n.resolvedLanguage || i18n.language || undefined;
   const timezoneLabel = useMemo(
@@ -73,14 +89,14 @@ const RateLimitState = ({ config, error, onRetry, variant }: HeterogeneousAgentG
 
     return rateLimitType.replaceAll('_', ' ');
   }, [error?.rateLimitInfo?.rateLimitType, t]);
-  const relativeResetText = useMemo(() => {
+  // The "~X h Y m" duration string, reused for the header hint and the
+  // scheduling action/label copy.
+  const relativeDuration = useMemo(() => {
     if (!resetsAt) return;
 
-    const now = Date.now();
-    const diffMs = Math.max(0, resetsAt * 1000 - now);
+    const diffMs = Math.max(0, resetsAt * 1000 - Date.now());
     const totalMinutes = Math.floor(diffMs / 60_000);
-
-    if (totalMinutes <= 0) return t('cliRateLimitGuide.relative.resetComplete');
+    if (totalMinutes <= 0) return;
 
     const days = Math.floor(totalMinutes / (24 * 60));
     const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
@@ -93,30 +109,78 @@ const RateLimitState = ({ config, error, onRetry, variant }: HeterogeneousAgentG
       parts.push(t('cliRateLimitGuide.relative.minute', { count: minutes }));
     }
 
-    return parts.length > 0
-      ? t('cliRateLimitGuide.resetInApprox', { duration: parts.slice(0, 2).join(' ') })
-      : t('cliRateLimitGuide.relative.resetComplete');
+    return parts.length > 0 ? parts.slice(0, 2).join(' ') : undefined;
   }, [resetsAt, t]);
+  const relativeResetText = useMemo(() => {
+    if (!resetsAt) return;
+    if (!relativeDuration) return t('cliRateLimitGuide.relative.resetComplete');
+    return t('cliRateLimitGuide.resetInApprox', { duration: relativeDuration });
+  }, [resetsAt, relativeDuration, t]);
 
-  return (
-    <GuideShell
-      icon={<config.icon size={24} />}
-      title={t('cliRateLimitGuide.title', { name: config.title })}
-      variant={variant}
-      actions={
+  const isScheduled = Boolean(schedule?.isScheduled);
+
+  const actions = useMemo(() => {
+    if (!schedule) {
+      return (
         <GuideActions
           retryLabel={t('cliRateLimitGuide.actions.retry')}
           retryPrimary={canRetry}
           onRetry={onRetry}
         />
-      }
+      );
+    }
+
+    if (schedule.isScheduled) {
+      return (
+        <div className={styles.actions}>
+          <Button size="small" onClick={schedule.onCancel}>
+            {t('cliRateLimitGuide.schedule.cancel')}
+          </Button>
+          <Button icon={<Play size={14} />} size="small" type="primary" onClick={schedule.onRunNow}>
+            {t('cliRateLimitGuide.schedule.runNow')}
+          </Button>
+        </div>
+      );
+    }
+
+    return (
+      <div className={styles.actions}>
+        {onRetry && (
+          <Button icon={<RotateCcw size={14} />} size="small" onClick={onRetry}>
+            {t('cliRateLimitGuide.schedule.retryNow')}
+          </Button>
+        )}
+        <Button
+          icon={<CalendarClock size={14} />}
+          size="small"
+          type="primary"
+          onClick={schedule.onSchedule}
+        >
+          {relativeDuration
+            ? t('cliRateLimitGuide.schedule.continueAfter', { duration: relativeDuration })
+            : t('cliRateLimitGuide.schedule.continueAfterReset')}
+        </Button>
+      </div>
+    );
+  }, [canRetry, onRetry, relativeDuration, schedule, t]);
+
+  return (
+    <GuideShell
+      actions={actions}
+      icon={<config.icon size={24} />}
+      title={t('cliRateLimitGuide.title', { name: config.title })}
+      variant={variant}
       headerDescription={
         <Text type="secondary">
-          {t('cliRateLimitGuide.afterReset', {
-            resetAt: formattedResetAt
-              ? `${formattedResetAt}${timezoneLabel ? ` (${timezoneLabel})` : ''}`
-              : t('cliRateLimitGuide.resetUnknown'),
-          })}
+          {isScheduled
+            ? relativeDuration
+              ? t('cliRateLimitGuide.schedule.scheduledForApprox', { duration: relativeDuration })
+              : t('cliRateLimitGuide.schedule.scheduledAfterReset')
+            : t('cliRateLimitGuide.afterReset', {
+                resetAt: formattedResetAt
+                  ? `${formattedResetAt}${timezoneLabel ? ` (${timezoneLabel})` : ''}`
+                  : t('cliRateLimitGuide.resetUnknown'),
+              })}
         </Text>
       }
     >

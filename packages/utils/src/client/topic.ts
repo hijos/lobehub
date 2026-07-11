@@ -200,7 +200,7 @@ export const groupTopicsByProject = (
 // the sidebar surfaces "needs attention" in one place. The remaining buckets map
 // 1:1 to a status. The group `id` resolves its title via `groupTitle.byStatus.<id>`.
 export type TopicStatusBucket =
-  'pending' | 'running' | 'active' | 'paused' | 'completed' | 'archived';
+  'pending' | 'running' | 'scheduled' | 'active' | 'paused' | 'completed' | 'archived';
 
 // Fixed priority order: `pending` (needs attention) comes first, then running,
 // then active; the remaining states fall below. Topics without a status are
@@ -215,6 +215,7 @@ export type TopicStatusBucket =
 export const STATUS_GROUP_ORDER: TopicStatusBucket[] = [
   'pending',
   'running',
+  'scheduled',
   'active',
   'paused',
   'completed',
@@ -236,6 +237,9 @@ const resolveStatusBucket = (
   if (topic.status === 'waitingForHuman' || topic.status === 'failed' || topic.status === 'unread')
     return 'pending';
   if (loadingTopicIds?.has(topic.id) || topic.status === 'running') return 'running';
+  // `scheduled` (backend will auto-continue after a rate limit) is its own bucket:
+  // it must NOT collapse into `pending`, so users don't read it as "needs manual action".
+  if (topic.status === 'scheduled') return 'scheduled';
   const status: ChatTopicStatus = topic.status ?? 'active';
   if (status === 'paused' || status === 'completed' || status === 'archived') return status;
   return 'active';

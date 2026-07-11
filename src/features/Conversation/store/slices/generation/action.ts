@@ -209,12 +209,30 @@ const runHeterogeneousFromExistingMessage = async (
   return assistantMsg.id;
 };
 
+export interface HeteroContinuationScheduleParams {
+  /** The failed assistant turn that hit the rate limit. */
+  failedAssistantMessageId: string;
+  /** Rate-limit classification snapshot from the adapter, for the due gate + UI copy. */
+  rateLimit?: {
+    rateLimitType?: string;
+    /** Epoch seconds when the window resets. */
+    resetsAt?: number;
+  };
+}
+
 /**
  * Generation Actions
  *
  * Handles generation control (stop, cancel, regenerate, continue)
  */
 export interface GenerationAction {
+  /**
+   * Cancel a pending backend-scheduled continuation for the active topic
+   * (rate-limit "取消自动继续"): clears `status = 'scheduled'` +
+   * `metadata.scheduledRun`.
+   */
+  cancelHeteroContinuation: () => Promise<void>;
+
   /**
    * Cancel a specific operation
    */
@@ -331,6 +349,21 @@ export interface GenerationAction {
    * fresh auto-retry budget is granted (used when a human retries manually).
    */
   resetHeteroOverloadRetry: (scopeId: string) => void;
+
+  /**
+   * Run a backend-scheduled continuation immediately (rate-limit "立即运行"):
+   * clears the scheduled state, then reuses the exact hetero error retry path
+   * (`delAndRegenerateMessage`) so it routes through the same execAgent /
+   * hetero-resume dispatch as the retry button.
+   */
+  runHeteroContinuationNow: (params: { failedAssistantMessageId: string }) => Promise<void>;
+
+  /**
+   * Schedule a backend continuation of the active topic after a rate limit
+   * (rate-limit "X 小时后继续"): writes `metadata.scheduledRun` then flips
+   * `status = 'scheduled'`. The backend cron picks it up and runs execAgent.
+   */
+  scheduleHeteroContinuation: (params: HeteroContinuationScheduleParams) => Promise<void>;
 
   /**
    * Stop current generation
@@ -585,6 +618,17 @@ export const generationSlice: StateCreator<
     }
   },
 
+  cancelHeteroContinuation: async () => {
+    const { context } = get();
+    const topicId = context.topicId;
+    if (!topicId) return;
+    const chatStore = useChatStore.getState();
+    // Flip status off `scheduled` first, then drop the payload, so the topic is
+    // never left as `scheduled` with no payload behind it.
+    await chatStore.updateTopicStatus({ status: 'failed', topicId });
+    await chatStore.updateTopicMetadata(topicId, { scheduledRun: null });
+  },
+
   delAndRegenerateMessage: async (messageId: string) => {
     const { context, displayMessages } = get();
     const chatStore = useChatStore.getState();
@@ -627,6 +671,55 @@ export const generationSlice: StateCreator<
       });
       throw error;
     }
+  },
+
+  runHeteroContinuationNow: async ({ failedAssistantMessageId }) => {
+    const { context } = get();
+    const topicId = context.topicId;
+    const chatStore = useChatStore.getState();
+    if (topicId) {
+      // Pre-flip so the sidebar leaves the Scheduled bucket immediately; the
+      // regenerate below then drives the real running lifecycle.
+      await chatStore.updateTopicStatus({ status: 'running', topicId });
+      await chatStore.updateTopicMetadata(topicId, { scheduledRun: null });
+    }
+    // Reuse the exact hetero error retry path — routes through the same
+    // execAgent / hetero-resume dispatch as the retry button.
+    await get().delAndRegenerateMessage(failedAssistantMessageId);
+  },
+
+  scheduleHeteroContinuation: async ({ failedAssistantMessageId, rateLimit }) => {
+    const { context, displayMessages } = get();
+    const topicId = context.topicId;
+    if (!topicId) return;
+
+    const userMessageId = displayMessages.find((m) => m.id === failedAssistantMessageId)?.parentId;
+    if (!userMessageId) return;
+
+    const chatStore = useChatStore.getState();
+    const topic = topicSelectors.getTopicById(topicId)(chatStore);
+    const nowIso = new Date().toISOString();
+
+    // Write the payload first, then flip the status — a reader that sees
+    // `status = 'scheduled'` must always find the payload behind it. `provider` /
+    // `model` are NOT duplicated; the backend reads them from the topic + its
+    // `heteroSessionId` metadata.
+    await chatStore.updateTopicMetadata(topicId, {
+      scheduledRun: {
+        createdAt: nowIso,
+        failedAssistantMessageId,
+        reason: 'rate_limit',
+        resume: {
+          sessionId: topic?.metadata?.heteroSessionId,
+          workingDirectory: topic?.metadata?.workingDirectory,
+        },
+        source: 'heterogeneous_agent',
+        updatedAt: nowIso,
+        userMessageId,
+        ...(rateLimit?.resetsAt || rateLimit?.rateLimitType ? { rateLimit } : {}),
+      },
+    });
+    await chatStore.updateTopicStatus({ status: 'scheduled', topicId });
   },
 
   delAndResendThreadMessage: async (messageId: string) => {

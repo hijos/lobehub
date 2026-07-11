@@ -476,7 +476,11 @@ describe('CompletionLifecycle.dispatchHooks — lastAssistantContent DB recovery
       { text: '图里是一只猫', type: 'text' },
       { image: 'data:image/png;base64,xxx', type: 'image' },
     ]);
-    const findById = vi.fn().mockResolvedValue({ content: serialized, id: 'msg-assistant' });
+    const findById = vi.fn().mockResolvedValue({
+      content: serialized,
+      id: 'msg-assistant',
+      metadata: { isMultimodal: true },
+    });
     (lifecycle as any).messageModel = { findById };
 
     await lifecycle.dispatchHooks('op-1', buildDoneState(''), 'done');
@@ -489,11 +493,34 @@ describe('CompletionLifecycle.dispatchHooks — lastAssistantContent DB recovery
     );
   });
 
+  it('returns a plain-text reply verbatim even when it looks like a parts array', async () => {
+    const lifecycle = buildLifecycle();
+    const dispatchSpy = setupSpies(lifecycle);
+    // A legitimate text answer that happens to be a JSON array with `type`
+    // fields — without metadata.isMultimodal it must NOT be parsed as parts.
+    const jsonLookalike = '[{"type":"custom","value":1}]';
+    const findById = vi.fn().mockResolvedValue({ content: jsonLookalike, id: 'msg-assistant' });
+    (lifecycle as any).messageModel = { findById };
+
+    await lifecycle.dispatchHooks('op-1', buildDoneState(''), 'done');
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      'op-1',
+      'onComplete',
+      expect.objectContaining({ lastAssistantContent: jsonLookalike }),
+      [],
+    );
+  });
+
   it('does not recover raw JSON from an image-only multimodal DB row', async () => {
     const lifecycle = buildLifecycle();
     const dispatchSpy = setupSpies(lifecycle);
     const serialized = JSON.stringify([{ image: 'data:image/png;base64,xxx', type: 'image' }]);
-    const findById = vi.fn().mockResolvedValue({ content: serialized, id: 'msg-assistant' });
+    const findById = vi.fn().mockResolvedValue({
+      content: serialized,
+      id: 'msg-assistant',
+      metadata: { isMultimodal: true },
+    });
     (lifecycle as any).messageModel = { findById };
 
     await lifecycle.dispatchHooks('op-1', buildDoneState(''), 'done');

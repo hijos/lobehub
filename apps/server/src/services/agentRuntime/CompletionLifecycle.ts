@@ -618,9 +618,14 @@ export class CompletionLifecycle {
 
       // Multimodal rows store `content` as serialized MessageContentPart[]
       // (see serverCallLlmFinalizer / serializePartsForStorage) — sending
-      // that verbatim would deliver raw JSON to the bot channel. Extract
-      // only the text parts; an image-only row yields no recoverable text.
-      const parts = deserializeParts(raw);
+      // that verbatim would deliver raw JSON to the bot channel. Gate on the
+      // row's `metadata.isMultimodal` flag (the same signal the app UI uses
+      // in DisplayContent) rather than sniffing the string, so a legitimate
+      // plain-text reply that happens to be a JSON array is preserved as-is.
+      // Extract only the text parts; an image-only row recovers nothing.
+      const isMultimodal =
+        (row?.metadata as { isMultimodal?: boolean } | null | undefined)?.isMultimodal === true;
+      const parts = isMultimodal ? deserializeParts(raw) : null;
       const content = parts
         ? parts
             .filter((p): p is Extract<MessageContentPart, { type: 'text' }> => p.type === 'text')

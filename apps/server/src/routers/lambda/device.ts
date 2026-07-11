@@ -1066,16 +1066,17 @@ export const deviceRouter = router({
           workspaceId: ctx.workspaceId,
         });
       } catch (error) {
+        // The machine has already opened and persisted a share connection
+        // above, and this (private-by-default) row is what hides it from other
+        // members — on ANY write failure (conflict race, transient DB error),
+        // best-effort roll the connection back so it doesn't linger as an
+        // unregistered workspace ghost, then surface the original error.
+        await deviceGateway.unenrollWorkspace({
+          deviceId: result.identity.deviceId,
+          userId: ctx.userId,
+          workspaceId: ctx.workspaceId,
+        });
         if (error instanceof WorkspaceDevicePrivateConflictError) {
-          // Race: the private row appeared between the pre-check and this
-          // write. The machine has already opened a share connection above —
-          // best-effort roll it back so it doesn't linger (and reconnect)
-          // under an id the server just refused.
-          await deviceGateway.unenrollWorkspace({
-            deviceId: result.identity.deviceId,
-            userId: ctx.userId,
-            workspaceId: ctx.workspaceId,
-          });
           throw new TRPCError({ code: 'CONFLICT', message: error.message });
         }
         throw error;

@@ -762,15 +762,15 @@ async function runConnect(options: ConnectOptions, isDaemonChild: boolean) {
         );
       else await registerDevice(auth, identity);
     } catch (err) {
-      // Workspace registration rejections are AUTHORITATIVE, not best-effort:
-      // the server refused this device id (e.g. it names another member's
-      // PRIVATE enrollment — WorkspaceDevicePrivateConflictError → CONFLICT).
-      // Connecting anyway would join the workspace pool as exactly the hidden
-      // device the rejection exists to prevent, so abort before connecting.
-      const trpcError = err as { data?: { code?: string }; shape?: { data?: { code?: string } } };
-      const code = trpcError?.data?.code ?? trpcError?.shape?.data?.code;
-      if (workspaceId && (code === 'CONFLICT' || code === 'FORBIDDEN')) {
-        error(`Workspace device registration rejected: ${(err as Error).message}`);
+      // Workspace-mode registration is AUTHORITATIVE, not best-effort: the
+      // `devices` row is what carries the (default-private) visibility marker
+      // that hides this machine from other members. Connecting without it —
+      // whether the server refused the id (another member's PRIVATE
+      // enrollment → CONFLICT) or the write simply failed transiently — would
+      // join the workspace pool as an unregistered transient that everyone
+      // can see, so abort before connecting.
+      if (workspaceId) {
+        error(`Workspace device registration failed: ${(err as Error).message}`);
         cleanup();
         process.exit(1);
       }

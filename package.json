@@ -402,7 +402,7 @@
     "pg": "^8.22.0",
     "plaiceholder": "^3.0.0",
     "polished": "^4.3.1",
-    "posthog-js": "~1.278.0",
+    "posthog-js": "~1.399.2",
     "pure-rand": "^7.0.1",
     "pwa-install-handler": "^2.6.5",
     "query-string": "^9.4.1",

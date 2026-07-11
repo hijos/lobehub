@@ -1,4 +1,6 @@
 import { isParkedStatus } from '@lobechat/agent-runtime';
+import type { MessageContentPart } from '@lobechat/types';
+import { deserializeParts } from '@lobechat/utils';
 import debug from 'debug';
 
 import {
@@ -611,8 +613,21 @@ export class CompletionLifecycle {
           ? this.messageModel
           : new MessageModel(this.serverDB, userId, this.workspaceId);
       const row = await messageModel.findById(assistantMessageId);
-      const content = typeof row?.content === 'string' ? row.content : undefined;
-      if (!content?.trim()) return undefined;
+      const raw = typeof row?.content === 'string' ? row.content : undefined;
+      if (!raw?.trim()) return undefined;
+
+      // Multimodal rows store `content` as serialized MessageContentPart[]
+      // (see serverCallLlmFinalizer / serializePartsForStorage) — sending
+      // that verbatim would deliver raw JSON to the bot channel. Extract
+      // only the text parts; an image-only row yields no recoverable text.
+      const parts = deserializeParts(raw);
+      const content = parts
+        ? parts
+            .filter((p): p is Extract<MessageContentPart, { type: 'text' }> => p.type === 'text')
+            .map((p) => p.text)
+            .join('')
+        : raw;
+      if (!content.trim()) return undefined;
 
       // console (not debug) so state/DB divergence stays visible in
       // production logs — the silent variant of this is what made

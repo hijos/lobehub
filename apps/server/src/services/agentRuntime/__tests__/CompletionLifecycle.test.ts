@@ -469,6 +469,43 @@ describe('CompletionLifecycle.dispatchHooks — lastAssistantContent DB recovery
     );
   });
 
+  it('extracts only text parts when the DB row stores serialized multimodal content', async () => {
+    const lifecycle = buildLifecycle();
+    const dispatchSpy = setupSpies(lifecycle);
+    const serialized = JSON.stringify([
+      { text: '图里是一只猫', type: 'text' },
+      { image: 'data:image/png;base64,xxx', type: 'image' },
+    ]);
+    const findById = vi.fn().mockResolvedValue({ content: serialized, id: 'msg-assistant' });
+    (lifecycle as any).messageModel = { findById };
+
+    await lifecycle.dispatchHooks('op-1', buildDoneState(''), 'done');
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      'op-1',
+      'onComplete',
+      expect.objectContaining({ lastAssistantContent: '图里是一只猫' }),
+      [],
+    );
+  });
+
+  it('does not recover raw JSON from an image-only multimodal DB row', async () => {
+    const lifecycle = buildLifecycle();
+    const dispatchSpy = setupSpies(lifecycle);
+    const serialized = JSON.stringify([{ image: 'data:image/png;base64,xxx', type: 'image' }]);
+    const findById = vi.fn().mockResolvedValue({ content: serialized, id: 'msg-assistant' });
+    (lifecycle as any).messageModel = { findById };
+
+    await lifecycle.dispatchHooks('op-1', buildDoneState(''), 'done');
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      'op-1',
+      'onComplete',
+      expect.objectContaining({ lastAssistantContent: undefined }),
+      [],
+    );
+  });
+
   it('leaves the event untouched when the DB row is empty too', async () => {
     const lifecycle = buildLifecycle();
     const dispatchSpy = setupSpies(lifecycle);

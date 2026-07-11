@@ -281,6 +281,12 @@ export class DeviceModel {
    * which deliberately preserves visibility on conflict — this is only called
    * after the user has confirmed the overwrite. Permission (enroller or
    * workspace owner) is enforced at the router via `canEditWorkspaceDevice`.
+   *
+   * A confirmed overwrite transfers the row to the sharer (`userId`): the
+   * workspace row is now a twin of the sharer's personal device, so share
+   * listing (`querySharedWorkspaceDevices`), the personal revoke UI, and the
+   * member-departure cleanup must all follow the sharer, not the original
+   * enroller.
    */
   overwriteSharedWorkspaceDevice = async (
     deviceId: string,
@@ -294,6 +300,7 @@ export class DeviceModel {
         lastSeenAt: now,
         sharedFromDeviceId: params.sharedFromDeviceId,
         updatedAt: now,
+        userId: this.userId,
         visibility: params.visibility,
       })
       .where(and(eq(devices.workspaceId, this.workspaceId), eq(devices.deviceId, deviceId)))

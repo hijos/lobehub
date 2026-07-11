@@ -318,6 +318,35 @@ describe('DeviceModel', () => {
         expect(row?.userId).toBe(userId);
       });
 
+      it('overwriteSharedWorkspaceDevice transfers ownership to the sharer on cross-user overwrite', async () => {
+        // another member originally enrolled the machine directly via CLI
+        await new DeviceModel(serverDB, otherUserId, wsId).registerWorkspaceDevice({
+          deviceId: 'wdev',
+          identitySource: 'machine-id',
+          visibility: 'public',
+          workspaceId: wsId,
+        });
+
+        // the sharer (e.g. a workspace owner) confirms overwriting it as a
+        // share from their personal device — the row must follow the sharer,
+        // or their share list / revoke UI can never surface it
+        const sharer = new DeviceModel(serverDB, userId, wsId);
+        const row = await sharer.overwriteSharedWorkspaceDevice('wdev', {
+          sharedFromDeviceId: 'my-personal',
+          visibility: 'private',
+        });
+        expect(row?.userId).toBe(userId);
+
+        const sharerShares = await sharer.querySharedWorkspaceDevices();
+        expect(sharerShares.map((s) => s.deviceId)).toContain('wdev');
+        const enrollerShares = await new DeviceModel(
+          serverDB,
+          otherUserId,
+          wsId,
+        ).querySharedWorkspaceDevices();
+        expect(enrollerShares.map((s) => s.deviceId)).not.toContain('wdev');
+      });
+
       it('a DIFFERENT member enrolling a private machine auto-publishes it', async () => {
         await new DeviceModel(serverDB, userId, wsId).registerWorkspaceDevice({
           deviceId: 'wdev',

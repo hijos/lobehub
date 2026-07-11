@@ -356,7 +356,9 @@ const HeteroDeviceSwitcher = memo<HeteroDeviceSwitcherProps>(({ agentId }) => {
   // which the picker eagerly fetches on mount so what the picker shows and
   // what dispatch will actually do always agree. Merged over the shared config
   // via `resolveAgencyConfig`.
-  useUserStore((s) => s.useFetchWorkspaceUserPreference)();
+  const { isLoading: isWorkspacePreferenceLoading } = useUserStore(
+    (s) => s.useFetchWorkspaceUserPreference,
+  )();
   const override = useUserStore(workspaceUserSettingsSelectors.agentDeviceOverrideById(agentId));
   const agencyConfig = resolveAgencyConfig(sharedAgencyConfig, override);
 
@@ -414,15 +416,23 @@ const HeteroDeviceSwitcher = memo<HeteroDeviceSwitcherProps>(({ agentId }) => {
   //
   // Fires only when the effective (merged) target and bound device are both
   // unset — an explicit prior selection, mine or (for personal) shared,
-  // is preserved.
+  // is preserved. Waits for the workspace preference fetch to settle first:
+  // before it returns, an existing per-user override looks unset and the
+  // default would clobber it.
   useEffect(() => {
     if (!isDesktop) return;
+    if (isWorkspacePreferenceLoading) return;
     if (agencyConfig?.executionTarget !== undefined) return;
     if (agencyConfig?.boundDeviceId !== undefined) return;
     if (!currentDeviceId) return;
     void selectExecutionTarget('local');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agencyConfig?.executionTarget, agencyConfig?.boundDeviceId, currentDeviceId]);
+  }, [
+    agencyConfig?.executionTarget,
+    agencyConfig?.boundDeviceId,
+    currentDeviceId,
+    isWorkspacePreferenceLoading,
+  ]);
 
   // Don't render for remote hetero agents — they use RemoteAgentConfigCard in profile.
   if (heteroType && isRemoteHeterogeneousType(heteroType)) return null;

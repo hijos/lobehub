@@ -65,7 +65,7 @@ export class WorkspaceMemberModel {
     // dead — and security-ambiguous — entry). Devices they enrolled directly on
     // the machine as 'public' are shared infra and stay; their `userId` merely
     // records the first enroller.
-    await this.db
+    const removedDevices = await this.db
       .delete(devices)
       .where(
         and(
@@ -73,9 +73,10 @@ export class WorkspaceMemberModel {
           eq(devices.userId, userId),
           or(eq(devices.visibility, 'private'), isNotNull(devices.sharedFromDeviceId)),
         ),
-      );
+      )
+      .returning({ deviceId: devices.deviceId });
 
-    return this.db
+    await this.db
       .update(workspaceMembers)
       .set({ deletedAt: new Date() })
       .where(
@@ -85,6 +86,12 @@ export class WorkspaceMemberModel {
           isNull(workspaceMembers.deletedAt),
         ),
       );
+
+    // Surfaced so callers can best-effort unenroll any still-connected gateway
+    // socket for these devices: deleting the row alone also removes it from the
+    // workspace hidden set, so a live socket would resurface to remaining
+    // members as an online transient until its connect token expires.
+    return { removedDeviceIds: removedDevices.map((d) => d.deviceId) };
   };
 
   updateMemberRole = async (workspaceId: string, userId: string, role: MemberRole) => {

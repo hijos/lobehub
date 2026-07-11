@@ -224,7 +224,10 @@ describe('WorkspaceMemberModel', () => {
         },
       ]);
 
-      await model.removeMember(workspaceId, memberId);
+      const { removedDeviceIds } = await model.removeMember(workspaceId, memberId);
+
+      // surfaced so callers can best-effort unenroll live gateway sockets
+      expect(removedDeviceIds.sort()).toEqual(['dep-private', 'dep-shared']);
 
       const remaining = (await serverDB.select({ deviceId: devices.deviceId }).from(devices))
         .map((d) => d.deviceId)

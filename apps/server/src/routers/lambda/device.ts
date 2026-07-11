@@ -988,10 +988,21 @@ export const deviceRouter = router({
         });
       }
 
-      // Caller-invisible rows (another member's private enrollment) resolve to
-      // undefined and fall through to `registerWorkspaceDevice`, which fails
-      // closed on that collision (`WorkspaceDevicePrivateConflictError`, mapped
-      // to CONFLICT below) — same fail-closed shape as the other lookups.
+      // Fail a cross-user PRIVATE collision NOW, before the machine opens and
+      // persists a workspace share connection — rejecting only at the later
+      // row write would leave the device connected (and auto-reconnecting)
+      // under the very id the rejection protects.
+      try {
+        await model.assertNoCrossUserPrivateConflict(probe.identity.deviceId);
+      } catch (error) {
+        if (error instanceof WorkspaceDevicePrivateConflictError) {
+          throw new TRPCError({ code: 'CONFLICT', message: error.message });
+        }
+        throw error;
+      }
+
+      // Caller-invisible rows (another member's private enrollment) were
+      // rejected above, so an undefined here really means "no row yet".
       const existing = await model.findWorkspaceDeviceById(probe.identity.deviceId);
       if (existing) {
         if (!input.confirmOverwrite) {
@@ -1056,6 +1067,15 @@ export const deviceRouter = router({
         });
       } catch (error) {
         if (error instanceof WorkspaceDevicePrivateConflictError) {
+          // Race: the private row appeared between the pre-check and this
+          // write. The machine has already opened a share connection above —
+          // best-effort roll it back so it doesn't linger (and reconnect)
+          // under an id the server just refused.
+          await deviceGateway.unenrollWorkspace({
+            deviceId: result.identity.deviceId,
+            userId: ctx.userId,
+            workspaceId: ctx.workspaceId,
+          });
           throw new TRPCError({ code: 'CONFLICT', message: error.message });
         }
         throw error;

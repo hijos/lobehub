@@ -762,6 +762,18 @@ async function runConnect(options: ConnectOptions, isDaemonChild: boolean) {
         );
       else await registerDevice(auth, identity);
     } catch (err) {
+      // Workspace registration rejections are AUTHORITATIVE, not best-effort:
+      // the server refused this device id (e.g. it names another member's
+      // PRIVATE enrollment — WorkspaceDevicePrivateConflictError → CONFLICT).
+      // Connecting anyway would join the workspace pool as exactly the hidden
+      // device the rejection exists to prevent, so abort before connecting.
+      const trpcError = err as { data?: { code?: string }; shape?: { data?: { code?: string } } };
+      const code = trpcError?.data?.code ?? trpcError?.shape?.data?.code;
+      if (workspaceId && (code === 'CONFLICT' || code === 'FORBIDDEN')) {
+        error(`Workspace device registration rejected: ${(err as Error).message}`);
+        cleanup();
+        process.exit(1);
+      }
       error(`Device registration failed (non-fatal): ${(err as Error).message}`);
     }
   }

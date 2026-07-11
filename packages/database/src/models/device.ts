@@ -106,6 +106,30 @@ export class DeviceModel {
    * row belongs to the workspace and surfaces to all its members. `userId`
    * records the enrolling admin.
    */
+  /**
+   * Fail closed when `deviceId` collides with ANOTHER member's PRIVATE
+   * enrollment: `deviceId` is CLIENT-SUPPLIED (explicit `--device-id`, stale
+   * cache), so the server cannot verify it names this physical machine, and
+   * treating the collision as "same machine" would let any member expose (or
+   * otherwise mutate) a device its enroller deliberately kept private. The
+   * genuine shared-box flow recovers by the enroller (or an owner) publishing
+   * the device first.
+   *
+   * Called by {@link registerWorkspaceDevice} pre-upsert, and exposed
+   * separately so flows with device-side effects (`shareDeviceToWorkspace`)
+   * can check BEFORE the machine opens a workspace gateway connection.
+   */
+  assertNoCrossUserPrivateConflict = async (deviceId: string, workspaceId?: string) => {
+    const wsId = workspaceId ?? this.workspaceId;
+    if (!wsId) return;
+    const conflicting = await this.db.query.devices.findFirst({
+      where: and(eq(devices.workspaceId, wsId), eq(devices.deviceId, deviceId)),
+    });
+    if (conflicting && conflicting.userId !== this.userId && conflicting.visibility === 'private') {
+      throw new WorkspaceDevicePrivateConflictError(deviceId);
+    }
+  };
+
   registerWorkspaceDevice = async (
     params: RegisterDeviceParams & {
       sharedFromDeviceId?: string;
@@ -113,23 +137,7 @@ export class DeviceModel {
       workspaceId: string;
     },
   ) => {
-    // `deviceId` is CLIENT-SUPPLIED (explicit `--device-id`, stale cache) — the
-    // server cannot verify it names this physical machine. If it collides with
-    // another member's PRIVATE enrollment, fail closed instead of touching the
-    // row: auto-publishing (or otherwise mutating) here would let any member
-    // expose a machine its enroller deliberately kept private. The genuine
-    // shared-box flow recovers by the enroller (or an owner) publishing the
-    // device first. Checked pre-upsert; the racing window is fail-safe because
-    // the conflict branch below never changes visibility across users.
-    const conflicting = await this.db.query.devices.findFirst({
-      where: and(
-        eq(devices.workspaceId, params.workspaceId),
-        eq(devices.deviceId, params.deviceId),
-      ),
-    });
-    if (conflicting && conflicting.userId !== this.userId && conflicting.visibility === 'private') {
-      throw new WorkspaceDevicePrivateConflictError(params.deviceId);
-    }
+    await this.assertNoCrossUserPrivateConflict(params.deviceId, params.workspaceId);
 
     const now = new Date();
     const [result] = await this.db

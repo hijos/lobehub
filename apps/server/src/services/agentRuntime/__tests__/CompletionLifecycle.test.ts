@@ -412,6 +412,111 @@ describe('CompletionLifecycle.dispatchHooks — async-tool park', () => {
   });
 });
 
+describe('CompletionLifecycle.dispatchHooks — lastAssistantContent DB recovery (LOBE-11632)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const buildDoneState = (assistantContent: string | undefined) => ({
+    messages: [
+      { content: 'user prompt', id: 'msg-user', role: 'user' },
+      { content: assistantContent, id: 'msg-assistant', role: 'assistant' },
+    ],
+    metadata: { _hooks: [], agentId: 'agent-1', topicId: 'tpc-1', userId: 'user-1' },
+    status: 'done',
+  });
+
+  const setupSpies = (lifecycle: CompletionLifecycle) => {
+    vi.spyOn(lifecycle as any, 'persistCompletion').mockResolvedValue(undefined);
+    vi.spyOn(lifecycle as any, 'createVerifyMessage').mockResolvedValue(undefined);
+    vi.spyOn(verifyServices, 'runVerifyOnCompletion').mockResolvedValue(undefined);
+    vi.spyOn(hookDispatcher, 'unregister').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    return vi.spyOn(hookDispatcher, 'dispatch').mockResolvedValue(undefined as any);
+  };
+
+  it('recovers the reply text from the DB row when the state carries no assistant text', async () => {
+    const lifecycle = buildLifecycle();
+    const dispatchSpy = setupSpies(lifecycle);
+    const findById = vi.fn().mockResolvedValue({ content: 'the real reply', id: 'msg-assistant' });
+    (lifecycle as any).messageModel = { findById };
+
+    await lifecycle.dispatchHooks('op-1', buildDoneState(''), 'done');
+
+    expect(findById).toHaveBeenCalledWith('msg-assistant');
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      'op-1',
+      'onComplete',
+      expect.objectContaining({ lastAssistantContent: 'the real reply' }),
+      [],
+    );
+  });
+
+  it('does not hit the DB when the state already carries assistant text', async () => {
+    const lifecycle = buildLifecycle();
+    const dispatchSpy = setupSpies(lifecycle);
+    const findById = vi.fn();
+    (lifecycle as any).messageModel = { findById };
+
+    await lifecycle.dispatchHooks('op-1', buildDoneState('state reply'), 'done');
+
+    expect(findById).not.toHaveBeenCalled();
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      'op-1',
+      'onComplete',
+      expect.objectContaining({ lastAssistantContent: 'state reply' }),
+      [],
+    );
+  });
+
+  it('leaves the event untouched when the DB row is empty too', async () => {
+    const lifecycle = buildLifecycle();
+    const dispatchSpy = setupSpies(lifecycle);
+    const findById = vi.fn().mockResolvedValue({ content: '', id: 'msg-assistant' });
+    (lifecycle as any).messageModel = { findById };
+
+    await lifecycle.dispatchHooks('op-1', buildDoneState(''), 'done');
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      'op-1',
+      'onComplete',
+      expect.objectContaining({ lastAssistantContent: undefined }),
+      [],
+    );
+  });
+
+  it('still dispatches the original event when the DB lookup throws', async () => {
+    const lifecycle = buildLifecycle();
+    const dispatchSpy = setupSpies(lifecycle);
+    const findById = vi.fn().mockRejectedValue(new Error('db down'));
+    (lifecycle as any).messageModel = { findById };
+
+    await lifecycle.dispatchHooks('op-1', buildDoneState(''), 'done');
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      'op-1',
+      'onComplete',
+      expect.objectContaining({ lastAssistantContent: undefined }),
+      [],
+    );
+  });
+
+  it('skips recovery on the error path', async () => {
+    const lifecycle = buildLifecycle();
+    setupSpies(lifecycle);
+    const findById = vi.fn();
+    (lifecycle as any).messageModel = { findById, update: vi.fn().mockResolvedValue(undefined) };
+
+    await lifecycle.dispatchHooks(
+      'op-1',
+      { ...buildDoneState(''), error: { message: 'boom' }, status: 'error' },
+      'error',
+    );
+
+    expect(findById).not.toHaveBeenCalled();
+  });
+});
+
 describe('CompletionLifecycle.emitSignalEvents — assistant anchor', () => {
   afterEach(() => {
     vi.restoreAllMocks();

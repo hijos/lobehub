@@ -1193,14 +1193,15 @@ export const deviceRouter = router({
         userId: ctx.userId,
         workspaceId: ctx.workspaceId,
       });
-      // PRIVATE rows are the exception: the row is the only thing
-      // `queryWorkspaceHiddenDeviceIds` uses to hide this device's socket from
-      // other members, so deleting it under a still-live socket (old client
-      // without the unenroll handler, RPC error) would resurface the private
-      // machine as a public transient. Fail the removal while the socket is
-      // demonstrably alive; a dead socket can't ghost, so an offline device
-      // still deletes fine.
-      if (!unenrolled.success && row.visibility === 'private') {
+      // But never delete the row under a still-live socket that did not
+      // acknowledge the unenroll (old client without the handler, RPC error):
+      // for a PRIVATE row that would resurface the machine to other members
+      // (the row is the only thing `queryWorkspaceHiddenDeviceIds` hides it
+      // by), and for ANY row it leaves an unregistered ghost that members can
+      // still dispatch to yet can no longer remove — there is no row left to
+      // delete. Fail the removal while the socket is demonstrably alive; a
+      // dead socket can't ghost, so an offline device still deletes fine.
+      if (!unenrolled.success) {
         const online = await deviceGateway.queryDeviceList(ctx.userId, ctx.workspaceId);
         if (online.some((d) => d.deviceId === input.deviceId)) {
           throw new TRPCError({

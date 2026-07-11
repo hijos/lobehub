@@ -274,21 +274,25 @@ describe('settingsSelectors', () => {
       const s = {
         settings: {
           systemAgent: {
-            enableAutoReply: true,
-            replyMessage: 'Custom auto reply',
+            translation: {
+              model: 'custom-translation-model',
+              provider: 'custom-provider',
+            },
           },
         },
       } as unknown as UserStore;
 
       const result = settingsSelectors.currentSystemAgent(s);
 
-      expect(result.enableAutoReply).toBe(true);
-      expect(result.replyMessage).toBe('Custom auto reply');
+      expect(result.translation).toEqual({
+        model: 'custom-translation-model',
+        provider: 'custom-provider',
+      });
       expect(result.agentMeta.provider).toBeTruthy();
       expect(result.historyCompress.provider).toBe(result.agentMeta.provider);
       expect(result.memoryAnalysisAgentConfig.provider).toBeTruthy();
       expect(result.userMemoryEmbedding.provider).toBeTruthy();
-      expect(result.translation.model).toBeTruthy();
+      expect(result.userMemoryPersonaWriter.provider).toBeTruthy();
     });
   });
 

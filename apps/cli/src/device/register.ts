@@ -1,7 +1,7 @@
 import os from 'node:os';
 
 import type { DeviceIdentity } from '@lobechat/device-identity';
-import { deriveDeviceId } from '@lobechat/device-identity';
+import { deriveDeviceId, deriveScopedFallbackId } from '@lobechat/device-identity';
 
 import { createLambdaClient } from '../api/client';
 
@@ -45,13 +45,23 @@ type Auth = { serverUrl: string; token: string; tokenType: 'apiKey' | 'jwt' | 's
  * Identity for a WORKSPACE device: derived from the workspaceId (namespaced) so
  * the same physical machine enrolled into a workspace is a distinct device from
  * its personal identity, and stable across reconnects.
+ *
+ * `fallbackSeed` (a stable per-install id, e.g. `loadOrCreateConnectionId()`)
+ * keeps the derivation stable on machines where the OS machine id is
+ * unreadable — enroll and restore re-derive this identity and must agree. The
+ * seed is namespaced per workspace principal, never used raw.
  */
 export function resolveWorkspaceDeviceIdentity(
   workspaceId: string,
   explicitDeviceId?: string,
+  fallbackSeed?: string,
 ): DeviceIdentity {
   if (explicitDeviceId) return { deviceId: explicitDeviceId, identitySource: 'fallback' };
-  return deriveDeviceId(`workspace:${workspaceId}`);
+  return deriveDeviceId(`workspace:${workspaceId}`, {
+    fallbackId: fallbackSeed
+      ? deriveScopedFallbackId(fallbackSeed, `workspace:${workspaceId}`)
+      : undefined,
+  });
 }
 
 /**

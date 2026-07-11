@@ -337,7 +337,7 @@ async function runConnect(options: ConnectOptions, isDaemonChild: boolean) {
   // user pin a VM to a fixed identity); otherwise derive from the machine id so
   // the same machine maps to one device across reconnects.
   const identity = workspaceId
-    ? resolveWorkspaceDeviceIdentity(workspaceId, options.deviceId)
+    ? resolveWorkspaceDeviceIdentity(workspaceId, options.deviceId, loadOrCreateConnectionId())
     : resolveDeviceIdentity(auth.userId, options.deviceId);
 
   // The token the gateway socket authenticates with. Re-minted on refresh for
@@ -482,7 +482,7 @@ async function runConnect(options: ConnectOptions, isDaemonChild: boolean) {
 
     // Same derivation as `lh connect --workspace` so the enroll RPC and a manual
     // workspace enrollment on this machine resolve to one workspace device.
-    const wsIdentity = resolveWorkspaceDeviceIdentity(wsId);
+    const wsIdentity = resolveWorkspaceDeviceIdentity(wsId, undefined, loadOrCreateConnectionId());
 
     const wsClient = new GatewayClient({
       channel,
@@ -583,7 +583,8 @@ async function runConnect(options: ConnectOptions, isDaemonChild: boolean) {
       // Dry-run probe: hand the server our derived identity so it can detect
       // an existing enrollment (and ask for overwrite confirmation) without
       // this machine opening or persisting anything.
-      if (identityOnly) return resolveWorkspaceDeviceIdentity(wsId);
+      if (identityOnly)
+        return resolveWorkspaceDeviceIdentity(wsId, undefined, loadOrCreateConnectionId());
       const wsIdentity = await openWorkspaceConnection(wsId, wsToken);
       // Persist so a restart re-opens the share connection without the server
       // having to re-share. The server registers the device row itself from
@@ -613,7 +614,11 @@ async function runConnect(options: ConnectOptions, isDaemonChild: boolean) {
   const restoreWorkspaceEnrollments = async () => {
     for (const wsId of loadWorkspaceEnrollments()) {
       try {
-        const wsIdentity = resolveWorkspaceDeviceIdentity(wsId);
+        const wsIdentity = resolveWorkspaceDeviceIdentity(
+          wsId,
+          undefined,
+          loadOrCreateConnectionId(),
+        );
         const trpc = createLambdaClient(auth, wsId);
         const devices = await trpc.device.listDevices.query();
         const stillEnrolled = devices.some(

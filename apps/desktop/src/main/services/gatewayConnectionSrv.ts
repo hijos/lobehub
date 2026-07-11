@@ -17,7 +17,7 @@ import type {
 } from '@lobechat/device-gateway-client';
 import { GatewayClient } from '@lobechat/device-gateway-client';
 import type { IdentitySource } from '@lobechat/device-identity';
-import { deriveDeviceId } from '@lobechat/device-identity';
+import { deriveDeviceId, deriveScopedFallbackId } from '@lobechat/device-identity';
 import type { GatewayConnectionStatus } from '@lobechat/electron-client-ipc';
 import { app, powerSaveBlocker } from 'electron';
 
@@ -507,7 +507,17 @@ export default class GatewayConnectionService extends ServiceModule {
    * resolves to one workspace device.
    */
   private resolveWorkspaceDeviceIdentity(workspaceId: string): EnrollWorkspaceResult {
-    return deriveDeviceId(`workspace:${workspaceId}`);
+    // Fallback machines (no readable machine id) must still derive a STABLE
+    // workspace id — the identity-only probe, the real enroll, and restore
+    // checks each re-derive it. Namespace the persisted install UUID rather
+    // than passing it raw: the raw UUID IS the personal deviceId on fallback
+    // machines, and reusing it here would collide the two pools.
+    const storedFallback = this.app.storeManager.get('gatewayDeviceId') as string | undefined;
+    return deriveDeviceId(`workspace:${workspaceId}`, {
+      fallbackId: storedFallback
+        ? deriveScopedFallbackId(storedFallback, `workspace:${workspaceId}`)
+        : undefined,
+    });
   }
 
   private async openWorkspaceClient(

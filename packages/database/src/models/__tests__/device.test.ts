@@ -297,6 +297,25 @@ describe('DeviceModel', () => {
         expect(reenrolled?.userId).toBe(userId);
       });
 
+      it('registerWorkspaceDevice honors an explicit public choice on re-enroll', async () => {
+        const wsModel = new DeviceModel(serverDB, userId, wsId);
+        await wsModel.registerWorkspaceDevice({
+          deviceId: 'wdev',
+          identitySource: 'machine-id',
+          workspaceId: wsId,
+        });
+
+        // `lh connect --workspace … --public` on an existing private enrollment
+        // must promote it — an ignored explicit flag would be a silent no-op
+        const promoted = await wsModel.registerWorkspaceDevice({
+          deviceId: 'wdev',
+          identitySource: 'machine-id',
+          visibility: 'public',
+          workspaceId: wsId,
+        });
+        expect(promoted?.visibility).toBe('public');
+      });
+
       it('overwriteSharedWorkspaceDevice applies visibility and links the personal twin', async () => {
         const wsModel = new DeviceModel(serverDB, userId, wsId);
         // pre-existing direct CLI enrollment: public, no share link

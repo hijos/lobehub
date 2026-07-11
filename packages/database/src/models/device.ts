@@ -119,20 +119,30 @@ export class DeviceModel {
       // Dedupe on (workspaceId, deviceId): a machine enrolled into a workspace is
       // ONE device no matter which member (re-)runs the enrollment. `userId` and
       // `sharedFromDeviceId` are left untouched on conflict — the original
-      // enroller keeps the enrollment. `visibility` is preserved on a re-enroll
-      // by the SAME member; when a DIFFERENT member enrolls a machine that sits
-      // in someone else's private pool, the row auto-publishes: two members
-      // independently operating the same machine means it's shared infra, and
-      // without the upgrade the second enroller's enrollment would vanish into
-      // a row they can't even see. The partial unique index requires its
-      // predicate be repeated in `targetWhere`.
+      // enroller keeps the enrollment. `visibility` on conflict:
+      //   - an EXPLICIT `visibility: 'public'` (`lh connect --workspace --public`)
+      //     always publishes — the caller just asked for it, silently keeping the
+      //     row private would make the flag a no-op on re-enroll. Callers pass
+      //     `visibility` only when the user chose explicitly, so a plain
+      //     reconnect (undefined) still preserves the stored choice;
+      //   - a re-enroll by the SAME member preserves the stored choice;
+      //   - a DIFFERENT member enrolling a machine that sits in someone else's
+      //     private pool auto-publishes: two members independently operating the
+      //     same machine means it's shared infra, and without the upgrade the
+      //     second enroller's enrollment would vanish into a row they can't even
+      //     see. (An explicit 'private' never demotes here for the same reason.)
+      // The partial unique index requires its predicate be repeated in
+      // `targetWhere`.
       .onConflictDoUpdate({
         set: {
           hostname: params.hostname,
           identitySource: params.identitySource,
           lastSeenAt: now,
           platform: params.platform,
-          visibility: sql`CASE WHEN ${devices.userId} <> excluded.user_id AND ${devices.visibility} = 'private' THEN 'public' ELSE ${devices.visibility} END`,
+          visibility:
+            params.visibility === 'public'
+              ? 'public'
+              : sql`CASE WHEN ${devices.userId} <> excluded.user_id AND ${devices.visibility} = 'private' THEN 'public' ELSE ${devices.visibility} END`,
         },
         target: [devices.workspaceId, devices.deviceId],
         targetWhere: sql`${devices.workspaceId} IS NOT NULL`,
